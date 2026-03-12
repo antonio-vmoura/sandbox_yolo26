@@ -215,4 +215,4 @@ runs/
 tensorboard/
 old_logs/
 ph2_train_seg/
-.cache
+*.cache
