@@ -84,7 +84,7 @@ docker run --gpus '"device=0"' -it --rm \
   -v $(pwd)/cache:/workspace/cache \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
-  yolo26-gpu \
+  yolo26_ft \
   python /workspace/yolo26_seg/train.py 2>&1 | tee logs/yolo26_ft_ph2_gpu0.log
 
 ```
