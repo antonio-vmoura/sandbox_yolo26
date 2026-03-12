@@ -1,0 +1,18 @@
+# train: ../train/images
+# val: ../valid/images
+# test: ../test/images
+
+path: /workspace/datasets/ph2  # Caminho raiz dentro do container
+train: train/images            # Pasta de treino
+val: valid/images              # Pasta de validação
+test: test/images              # Pasta de teste
+
+nc: 1
+names: ['Skin-Lesions-Wb1v']
+
+roboflow:
+  workspace: vmouramaster
+  project: ph2-icj5g-9wkie
+  version: 6
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/vmouramaster/ph2-icj5g-9wkie/dataset/6
