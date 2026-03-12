@@ -3,7 +3,7 @@ from ultralytics import YOLO
 
 def main():
     # 1. Carrega o modelo pré-treinado de segmentação (versão 'nano' para iniciar)
-    model = YOLO("yolo26n-seg.pt")
+    model = YOLO("/workspace/cache/yolo26n-seg.pt")
 
     # 2. Inicia o Fine-Tuning
     results = model.train(
