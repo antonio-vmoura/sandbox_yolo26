@@ -1,4 +1,4 @@
-# YOLO26 Fine-Tuning on the PH2 Dataset
+# YOLO26 Fine-Tuning
 
 This repository provides scripts and configuration files for fine-tuning the **Ultralytics YOLO26** model in a custom dataset, focusing on skin lesion instance segmentation.
 
