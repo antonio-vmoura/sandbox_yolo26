@@ -4,6 +4,8 @@ This repository provides scripts and configuration files for fine-tuning the **U
 
 The goal is to evaluate how well YOLO26 adapts to medical images with limited data, leveraging its state-of-the-art segmentation capabilities.
 
+https://www.ultralytics.com/blog/how-to-custom-train-ultralytics-yolo26-for-instance-segmentation
+
 ---
 
 ## Overview
