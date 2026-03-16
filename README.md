@@ -45,9 +45,19 @@ sandbox_sam3/
 
 ---
 
-## Training
+## Environment Setup
 
-Training is executed through Docker to ensure reproducibility and environment isolation. The YOLO26 pre-trained weights are automatically downloaded during the first run.
+### Build the Docker Image
+
+Build the environment containing CUDA, PyTorch, and all necessary dependencies:
+
+```bash
+docker build -t yolo26_ft .
+```
+
+---
+
+## Training Execution
 
 ### Option A: Run training using ALL available GPUs
 
@@ -91,15 +101,14 @@ docker run --gpus '"device=0"' -it --rm \
 
 ```
 
----
+### Option C: Automated Training (Wait for Free GPUs)
 
-## Outputs
+```bash
+chmod +x wait_gpu.sh
+```
 
-All outputs are automatically saved to:
-
-```text
-./logs
-
+```bash
+./wait_gpu.sh
 ```
 
 ---
