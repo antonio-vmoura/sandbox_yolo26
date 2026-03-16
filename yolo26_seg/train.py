@@ -14,8 +14,7 @@ def main():
         name="ph2_finetuning_medium", # Nome da pasta do experimento
         device=0, # Usa a GPU 0
         workers=4, # Threads para carregar dados
-        batch=16, # Tamanho do lote (ajuste conforme a VRAM da sua GPU)
-        amp=False  # Add this line to disable Automatic Mixed Precision
+        batch=16 # Tamanho do lote (ajuste conforme a VRAM da sua GPU)
     )
 
 if __name__ == "__main__":
