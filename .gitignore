@@ -216,3 +216,6 @@ tensorboard/
 old_logs/
 ph2_train_seg/
 *.cache
+
+# Heavy datasets
+datasets/isic_2018_task1_yolo26
