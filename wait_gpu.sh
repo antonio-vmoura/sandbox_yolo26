@@ -78,4 +78,4 @@ docker run --gpus all -it --rm \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   yolo26_ft \
-  python /workspace/yolo26_seg/train.py 2>&1 | tee logs/yolo26_medium_ft_isic_2018_task_1_100.log
+  python /workspace/yolo26_seg/train.py 2>&1 | tee logs/yolo26_xlarge_ft_isic_2018_task_1_100.log

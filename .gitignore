@@ -219,3 +219,4 @@ ph2_train_seg/
 
 # Heavy datasets
 datasets/isic_2018_task1_yolo26
+datasets/isic_2018_task1_yolo26_2
