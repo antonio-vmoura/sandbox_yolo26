@@ -100,8 +100,9 @@ def main():
         # 7. SEGMENTAÇÃO
         # =====================================================================
         overlap_mask=True,      # ISIC tem 1 instância por imagem; valor é indiferente, mantido padrão.
-        mask_ratio=4,           # Downsample de máscara = 4. Bom p/ imgsz 768.
-                                #   mask_ratio=1 = máscara full-res (muito mais VRAM, ganho marginal aqui).
+        mask_ratio=2,           # Downsample de máscara = 2 (ao invés do default 4). Em imgsz=640,
+                                #   máscara sobe de 160×160 p/ 320×320 -> ganho direto em mAP@50-95 de borda.
+                                #   Custo: ~1.3x VRAM. Principal alavanca quando imgsz está travado.
         retina_masks=False,     # Só afeta inferência/val; default False é o recomendado em treino.
 
         # =====================================================================
