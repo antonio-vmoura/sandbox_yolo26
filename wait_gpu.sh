@@ -1,15 +1,9 @@
 #!/bin/bash
 
-# Verifica se o token foi setado para evitar falha após horas de espera
-if [ -z "$HUGGING_FACE_HUB_TOKEN" ]; then
-    echo "ERRO: A variável HUGGING_FACE_HUB_TOKEN não está definida no ambiente."
-    exit 1
-fi
-
 echo "Aguardando as GPUs 0 e 1 ficarem livres por 5 minutos contínuos..."
 
 CHECK_INTERVAL=60
-REQUIRED_IDLE_MINUTES=5
+REQUIRED_IDLE_MINUTES=3
 IDLE_COUNT=0
 
 while true; do
@@ -78,4 +72,4 @@ docker run --gpus all -it --rm \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   yolo26_ft \
-  python /workspace/yolo26_seg/train.py 2>&1 | tee logs/yolo26_xlarge_ft_isic_2018_task_1_100.log
+  python /workspace/yolo26_seg/train_complete_small_2.py 2>&1 | tee logs/yolo26_small_ft_isic_2018_task_1_100.log
