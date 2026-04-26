@@ -6,7 +6,7 @@ def main():
 
     # Modelo base pré-treinado em COCO-seg.
     #      Se observar gap train/val grande, trocar por yolo26l-seg.pt (large).
-    model = YOLO("/workspace/cache/yolo26n-seg.pt")
+    model = YOLO("/workspace/cache/yolo26l-seg.pt")
 
     results = model.train(
         # =====================================================================
@@ -14,7 +14,7 @@ def main():
         # =====================================================================
         data="/workspace/datasets/isic_2018_task1_yolo26/data.yaml",
         project="/workspace/logs",
-        name="yolo26_nano_ft_isic_2018_completo",
+        name="yolo26_large_ft_isic_2018",
         exist_ok=False,        # Falha se a pasta já existir — evita sobrescrever experimento.
         task="segment",        # Explicitar a task (herdada do .pt, mas deixa robusto a troca de peso).
         pretrained=True,       # Carrega pesos do .pt — essencial para fine-tuning.
