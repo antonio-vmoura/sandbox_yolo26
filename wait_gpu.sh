@@ -72,7 +72,7 @@ done
 #   -v /etc/passwd:/etc/passwd:ro \
 #   -v /etc/group:/etc/group:ro \
 #   yolo26_ft \
-#   python /workspace/yolo26_seg/train_isic_2018_task_1_v6.py 2>&1 | tee logs/yolo26_small_ft_isic_2018_v6_lab.log
+#   python /workspace/yolo26_seg/train_isic_2018_task_1_v2.py 2>&1 | tee logs/yolo26_small_ft_isic_2018_v2.log
 
 
 docker run --gpus all -it --rm \
@@ -89,4 +89,4 @@ docker run --gpus all -it --rm \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   yolo26_ft \
-  python /workspace/yolo26_seg/train_isic_2018_task_1_v7.py --model small 2>&1 | tee logs/yolo26_small_ft_isic_2018_v7.log
+  python /workspace/yolo26_seg/train_isic_2018_task_1_v7.py --model xlarge 2>&1 | tee logs/yolo26_xlarge_ft_isic_2018_v7.log

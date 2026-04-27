@@ -5,7 +5,7 @@ def main():
     start_time = time.perf_counter()
     
     # Carregamento do modelo base (versão xlarge para máxima capacidade de extração de features)
-    model = YOLO("/workspace/cache/yolo26x-seg.pt")
+    model = YOLO("/workspace/cache/yolo26s-seg.pt")
 
     # Configuração exaustiva do Fine-Tuning
     results = model.train(
@@ -14,11 +14,11 @@ def main():
         # ==========================================
         data="/workspace/datasets/isic_2018_task1_yolo26/data.yaml",
         project="/workspace/logs",
-        name="yolo26_xlarge_ft_isic_2018_completo",
+        name="yolo26_small_ft_isic_2018_completo",
         epochs=100,
         imgsz=640,
-        device=-1,             # Aloca a carga para a(s) GPU(s) com maior memória/ociosidade
-        batch=-1,              # Auto-ajuste de batch size para ocupar ~60% da VRAM com segurança
+        device=[0, 1],             # Aloca a carga para a(s) GPU(s) com maior memória/ociosidade
+        batch=32,              # Auto-ajuste de batch size para ocupar ~60% da VRAM com segurança
         workers=4,             # Threads dedicadas ao dataloader
         
         # ==========================================
@@ -42,7 +42,7 @@ def main():
         # ==========================================
         # 4. BALANCEAMENTO DE CLASSES
         # ==========================================
-        cls_pw=0.25,           # Dá mais tração (peso) a classes menos frequentes (ajuste entre 0.0 e 1.0)
+        # cls_pw=0.25,           # Dá mais tração (peso) a classes menos frequentes (ajuste entre 0.0 e 1.0)
         
         # ==========================================
         # 5. DATA AUGMENTATION (Otimizado para Pele)
