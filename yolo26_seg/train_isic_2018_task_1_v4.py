@@ -73,9 +73,9 @@ def main():
         # =====================================================================
         # 1. DADOS E INFRAESTRUTURA
         # =====================================================================
-        data="/workspace/datasets/isic_2018_task1_yolo26/data.yaml",
+        data="/workspace/datasets/isic_2018_task1_yolo26_lab/data.yaml",
         project="/workspace/logs",
-        name=f"yolo26_{MODEL_SIZE}_ft_isic_2018_v4",
+        name=f"yolo26_{MODEL_SIZE}_ft_isic_2018_v4_lab",
         exist_ok=False,
         task="segment",
         pretrained=True,
