@@ -49,7 +49,7 @@ from ultralytics import YOLO
 def main():
     start_time = time.perf_counter()
 
-    model = YOLO("/workspace/cache/yolo26s-seg.pt")
+    model = YOLO("/workspace/cache/yolo26l-seg.pt")
 
     results = model.train(
         # =====================================================================
@@ -57,7 +57,7 @@ def main():
         # =====================================================================
         data="/workspace/datasets/isic_2018_task1_yolo26/data.yaml",
         project="/workspace/logs",
-        name="yolo26_small_ft_isic_2018_v5",
+        name="yolo26_large_ft_isic_2018_v5",
         epochs=120,             # v2 usava 100; +20 para cobrir patience folgada.
         imgsz=640,              # Mantido (pedido explícito do usuário).
         device=[0, 1],          # DDP em 2 GPUs (mesmo setup da v3/v4).
