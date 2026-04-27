@@ -1,5 +1,5 @@
 """
-train_isic_2018_task_1_v7.py — Fine-tuning YOLO26s-seg no ISIC 2018 Task 1.
+train_isic_2018_task_1_v7.py — Fine-tuning YOLO26-seg no ISIC 2018 Task 1.
 
 Versão **v7 (small, ablation de optimizer sobre v6)**.
 
@@ -10,99 +10,165 @@ Resultados small até agora:
   * v5 small: 0.7021 @ ep 32   (minimalista, AdamW lr0=1e-3, mid 0.9e-3)
   * v6 small: 0.6999 @ ep 46   (= v5 com lr0=2e-3, mid 1.65e-3)
 
-Hipótese falsificada em v6:
-  Dobrar `lr0` em v6 levou `lr/pg0` mid de 0.9e-3 → 1.65e-3 ✓ (LR fix funcionou)
-  MAS best mAP@50-95 não mudou (0.7021 → 0.6999, Δ=−0.002, ruído). LR não era
-  o gargalo. Variância até piorou (std ep20+ 0.036 → 0.062).
+Hipótese falsificada em v6: LR não era o gargalo (dobrar lr0 não recuperou
+o gap de 0.037 vs v2). Hipótese a testar em v7: o otimizador é o gargalo.
 
-Hipótese a testar em v7:
-  O gargalo está no **otimizador**. v2 usava `MuSGD` (Muon updates ortogonais
-  + SGD), v3-v6 usam `AdamW`. Em datasets pequenos, Muon costuma generalizar
-  melhor (gradientes ortogonais reduzem co-adaptação de filtros).
+Filosofia desta v7 (refator):
+  * Todos os hiperparâmetros listados explicitamente, com seu valor default
+    do Ultralytics — fica fácil identificar/alterar qualquer um.
+  * Linhas marcadas com `# v7` são as ÚNICAS que diferem do default. São o
+    que estamos de fato testando.
+  * Modelo selecionado via CLI (`--model {nano,small,medium,large,xlarge}`).
+    Default = small (alvo da ablation atual).
 
-Mudança em v7 (única variável vs v6):
-  `optimizer`: "AdamW" → "MuSGD".
-
-Observação importante sobre LR:
-  Mantemos `lr0=0.002` (=v6, ablation limpa), mas o Ultralytics aplica
-  scaling diferente por otimizador. v2 com MuSGD+lr0=0.001 deu `lr/pg0` mid
-  ≈ 2.5e-3 (fator ~2.5×). Em v7 com MuSGD+lr0=0.002 esperamos mid ≈ 5e-3 —
-  ALTO. Pode divergir / oscilar mais que v2.
-
-  Se v7 divergir nas primeiras épocas (val/seg_loss > 50 na ep 1), aborta e
-  rodamos v7b com `lr0=0.001` (mesmo regime efetivo da v2 best).
-
-Atenção: `MuSGD` + `amp=True` foi exatamente o combo que deu NaN no xlarge
-da v2 (val/seg_loss ep1 = 629). No `small` v2 não teve esse problema, mas
-amp=False era o setup. Em v7 mantemos amp=True (era um dos 4 fixes de v5).
-Se houver NaN, próximo passo é v7c com `amp=False`.
+Uso:
+    python train_isic_2018_task_1_v7.py --model small
+    python train_isic_2018_task_1_v7.py --model large
 """
 
+import argparse
 import time
 from ultralytics import YOLO
 
 
+# Mapa modelo -> arquivo de pesos. Editar aqui se mudar caminho/versão.
+WEIGHTS = {
+    "nano":   "/workspace/cache/yolo26n-seg.pt",
+    "small":  "/workspace/cache/yolo26s-seg.pt",
+    "medium": "/workspace/cache/yolo26m-seg.pt",
+    "large":  "/workspace/cache/yolo26l-seg.pt",
+    "xlarge": "/workspace/cache/yolo26x-seg.pt",
+}
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Fine-tuning YOLO26-seg no ISIC 2018 Task 1 (v7).")
+    p.add_argument(
+        "--model", choices=list(WEIGHTS), default="small",
+        help="Tamanho do modelo YOLO26-seg (default: small).",
+    )
+    return p.parse_args()
+
+
 def main():
+    args = parse_args()
     start_time = time.perf_counter()
 
-    model = YOLO("/workspace/cache/yolo26s-seg.pt")
+    model = YOLO(WEIGHTS[args.model])
 
     results = model.train(
         # =====================================================================
-        # 1. DADOS E INFRAESTRUTURA  (igual v6)
+        # 1. INFRAESTRUTURA — caminhos e identificação do experimento
         # =====================================================================
         data="/workspace/datasets/isic_2018_task1_yolo26/data.yaml",
         project="/workspace/logs",
-        name="yolo26_small_ft_isic_2018_v7",
-        epochs=120,
-        imgsz=640,
-        device=[0, 1],          # DDP em 2 GPUs.
-        batch=32,               # =16/GPU. Ultralytics 8.4.21 rejeita -1 em DDP.
-        workers=4,
+        name=f"yolo26_{args.model}_ft_isic_2018_v7",
 
         # =====================================================================
-        # 2. ESTABILIDADE / OTIMIZADOR  (ÚNICA mudança vs v6)
+        # 2. HIPERPARÂMETROS DA EXECUÇÃO  (* = mudanças desta versão)
+        #    Todos abaixo nos valores DEFAULT do Ultralytics, exceto onde
+        #    marcado com `# v7`.
         # =====================================================================
-        amp=True,
-        optimizer="MuSGD",      # v7: "AdamW" → "MuSGD". Mesmo otimizador da v2.
+        # ---- Dados / loop de treino ----
+        exist_ok=False,             # default
+        task="segment",             # default p/ um -seg.pt; explicito p/ robustez
+        pretrained=True,            # default
+        epochs=120,                 # v7: default 100, +20 p/ folga com cos_lr
+        time=None,                  # default
+        imgsz=640,                  # default (mantido a pedido)
+        rect=False,                 # default
+        multi_scale=0.0,            # default
+        fraction=1.0,               # default
+        single_cls=False,           # default
 
-        # =====================================================================
-        # 3. APRENDIZADO  (igual v6)
-        # =====================================================================
-        lr0=0.002,              # Mantido para isolar variável "optimizer".
-                                #   ATENÇÃO: com MuSGD esperamos lr/pg0 mid ≈ 5e-3
-                                #   (alto). Se divergir, baixar para 0.001 em v7b.
-        lrf=0.01,
-        momentum=0.937,
-        weight_decay=0.0005,
-        warmup_epochs=3.0,
-        warmup_momentum=0.8,
-        cos_lr=True,
-        patience=20,
+        # ---- Hardware ----
+        device=[0, 1],              # default None — DDP em 2 GPUs neste ambiente
+        batch=32,                   # default 16; v7 usa 32 (=16/GPU em DDP).
+                                    #   Ultralytics 8.4.21 rejeita -1 em multi-GPU.
+        workers=8,                  # default
+        cache=False,                # default
+        compile=False,              # default
 
-        # =====================================================================
-        # 4. DATA AUGMENTATION  (igual v6 / v5 / v2)
-        # =====================================================================
-        degrees=180.0,
-        flipud=0.5,
-        fliplr=0.5,
-        hsv_h=0.015,
-        hsv_s=0.7,
-        hsv_v=0.4,
-        translate=0.1,
-        scale=0.5,
-        mosaic=1.0,
-        mixup=0.1,
+        # ---- Estabilidade / Otimizador ----
+        amp=True,                   # default
+        optimizer="MuSGD",          # v7: default "auto" (vira AdamW p/ ds pequeno).
+                                    #     ABLATION CHAVE — v2 (MuSGD) atingiu 0.7368;
+                                    #     v3-v6 com AdamW estagnaram em ~0.70.
+        nbs=64,                     # default
 
-        # =====================================================================
-        # 5. SEGMENTAÇÃO + fixes mantidos (igual v6 / v5)
-        # =====================================================================
-        close_mosaic=15,
-        erasing=0.0,
+        # ---- Aprendizado ----
+        lr0=0.002,                  # v7: default 0.01. Mantido do v6 p/ ablation
+                                    #     limpa. ATENÇÃO: com MuSGD o lr/pg0 mid
+                                    #     pode ir a ~5e-3 (alto). Se divergir,
+                                    #     baixar para 0.001 em v7b.
+        lrf=0.01,                   # default
+        momentum=0.937,             # default
+        weight_decay=0.0005,        # default
+        warmup_epochs=3.0,          # default
+        warmup_momentum=0.8,        # default
+        warmup_bias_lr=0.1,         # default
+        cos_lr=True,                # v7: default False. Cosine decay é melhor p/
+                                    #     fine-tuning longo.
+        patience=20,                # v7: default 100. Val tem 100 imgs; 20 já é
+                                    #     folgado e economiza ~30% do tempo.
+
+        # ---- Regularização / Reprodutibilidade ----
+        dropout=0.0,                # default
+        freeze=None,                # default
+        seed=0,                     # default
+        deterministic=True,         # default
+        save=True,                  # default
+        save_period=-1,             # default
+        resume=False,               # default
+
+        # ---- Pesos das losses ----
+        box=7.5,                    # default
+        cls=0.5,                    # default
+        dfl=1.5,                    # default
+        pose=12.0,                  # default (irrelevante p/ seg)
+        kobj=1.0,                   # default (irrelevante p/ seg)
+
+        # ---- Segmentação ----
+        overlap_mask=True,          # default
+        mask_ratio=4,               # default
+        retina_masks=False,         # default
+
+        # ---- Validação ----
+        val=True,                   # default
+        split="val",                # default
+        plots=True,                 # default
+        verbose=True,               # default
+        iou=0.7,                    # default
+        max_det=300,                # default
+        half=False,                 # default
+        save_json=False,            # default
+
+        # ---- Data Augmentation ----
+        degrees=0.0,                # default
+        translate=0.1,              # default
+        scale=0.5,                  # default
+        shear=0.0,                  # default
+        perspective=0.0,            # default
+        flipud=0.0,                 # default
+        fliplr=0.5,                 # default
+        hsv_h=0.015,                # default
+        hsv_s=0.7,                  # default
+        hsv_v=0.4,                  # default
+        bgr=0.0,                    # default
+        mosaic=1.0,                 # default
+        close_mosaic=15,            # v7: default 10. +5 ep finais sem mosaic
+                                    #     refinam borda em imagens reais.
+        mixup=0.0,                  # default
+        cutmix=0.0,                 # default
+        copy_paste=0.0,             # default
+        copy_paste_mode="flip",     # default
+        auto_augment="randaugment", # default
+        erasing=0.0,                # v7: default 0.4. Random-erasing pode cair
+                                    #     sobre a lesão e corromper a máscara.
     )
 
     tempo_total = time.perf_counter() - start_time
-    print("\nTreinamento concluído com sucesso (v7 small).")
+    print(f"\nTreinamento concluído com sucesso (v7 {args.model}).")
     print(f"Tempo total de execução: {tempo_total / 60:.2f} minutos.")
     return results
 
