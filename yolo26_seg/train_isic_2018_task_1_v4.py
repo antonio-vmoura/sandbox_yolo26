@@ -12,7 +12,9 @@ Diagnóstico que motivou esta versão (vs v3):
 
 Mudanças-chave em v4 (vs v3):
   * `lr0`: 1e-3 -> 2e-3 (compensa batch menor + DDP).
-  * `batch`: 16 -> -1 (autobatch) por padrão; deixa o Ultralytics maximizar.
+  * `batch`: 16 -> 32 (16/GPU em DDP; Ultralytics 8.4.21 rejeita batch=-1
+    em multi-GPU). 32 dobra o batch efetivo da v3 e leva `lr/pg0` mid de
+    ~7e-4 para ~2.8e-3, alinhado com a v2 (~2.5e-3).
   * `patience`: 30 -> 20 (em v3 todos os runs tinham 30+ ep depois do best).
   * `epochs`: 150 -> 120 (orçamento mais que suficiente com LR adequado).
   * Hiperparâmetros agora **derivados do tamanho do modelo** (`MODEL_SIZE`):
@@ -91,9 +93,11 @@ def main():
         # 2. HARDWARE / DATALOADER
         # =====================================================================
         device=[0, 1],          # DDP em 2 GPUs. Use `device=0` se quiser single-GPU.
-        batch=-1,               # v4: -1 (autobatch) — em v3, batch=16 + DDP virou
-                                #   8/GPU e derrubou o LR efetivo. -1 deixa o
-                                #   Ultralytics ajustar para ~60% da VRAM.
+        batch=32,               # v4: 16 -> 32 (=16/GPU em DDP). Ultralytics 8.4.21
+                                #   NÃO aceita batch=-1 em multi-GPU. Dobrar p/ 32
+                                #   reverte o efeito do DDP halving da v3 e leva
+                                #   `lr/pg0` mid de ~7e-4 (v3) para ~2.8e-3 (≈v2).
+                                #   Em single-GPU pode usar `batch=-1` (autobatch).
         workers=8,
         cache=False,            # Setar "ram" se houver RAM sobrando.
         compile=False,          # torch.compile ainda instável com heads de seg.
