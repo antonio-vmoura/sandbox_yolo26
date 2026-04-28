@@ -60,7 +60,7 @@ def main():
         # =====================================================================
         # 1. INFRAESTRUTURA — caminhos e identificação do experimento
         # =====================================================================
-        data="/workspace/datasets/isic_2018_task1_yolo26/data.yaml",
+        data="/workspace/datasets/isic_2018_task1_yolo26_lab/data.yaml",
         project="/workspace/logs",
         name=f"yolo26_{args.model}_ft_isic_2018_v7",
 
