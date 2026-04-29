@@ -26,7 +26,15 @@ Filosofia (mesma da v7):
     * Modelo selecionado via CLI (`--model`).
 
 Uso típico:
+    # Espaço wide (default — exploração inicial, 20 hp):
     python tune_isic_2018_task_1.py --model small
+
+    # Espaço refined (follow-up — drops 5 hp sem sinal e narrows os de alto sinal,
+    # baseado nas correlações Pearson do HPO inicial do small):
+    python tune_isic_2018_task_1.py --model nano   --space refined --iterations 50
+    python tune_isic_2018_task_1.py --model medium --space refined --iterations 50
+
+    # Quantos trials/épocas:
     python tune_isic_2018_task_1.py --model small --iterations 50 --epochs 30
 
 Em docker:
@@ -57,15 +65,38 @@ WEIGHTS = {
 }
 
 # ----------------------------------------------------------------------------
-# SEARCH SPACE — ranges narrow-ed para o ISIC 2018 Task 1
+# SEARCH SPACES — duas variantes selecionáveis via `--space`
 # ----------------------------------------------------------------------------
-# Ranges baseados em:
-#   * default do Ultralytics (Tuner.space)
-#   * o que aprendemos nas v2-v7 (lr0 1e-3 a 2e-3 funciona; mosaic alto ok;
-#     erasing alto corrompe máscara; mixup útil em moderação)
 # Cada entry: (min, max) ou (min, max, gain). Gain controla amplitude da
 # mutação gaussiana — mais gain = mais agressivo. Default = 1.0.
-SEARCH_SPACE = {
+#
+# (1) `wide` — exploração inicial. Ranges baseados em:
+#       * default do Ultralytics (Tuner.space)
+#       * o que aprendemos nas v2-v7 (lr0 1e-3 a 2e-3 funciona; mosaic alto
+#         ok; erasing alto corrompe máscara; mixup útil em moderação)
+#     Use quando ainda não há informação prévia sobre o dataset.
+#
+# (2) `refined` — follow-up. Construído a partir das correlações Pearson
+#     hp×fitness do HPO inicial do small (30 trials, ver
+#     analyze_hpo_results.ipynb):
+#       * DROPS (|r| < 0.05 — não há sinal estatístico):
+#           scale, degrees, box, fliplr, warmup_momentum
+#         (esses 5 hp ficam fixos no default Ultralytics)
+#       * NARROWS (alto sinal — concentra GA na região promissora):
+#           mixup       r=-0.77  [0, 0.3]   → [0.0, 0.05]
+#           copy_paste  r=-0.67  [0, 0.3]   → [0.0, 0.05]
+#           lr0         r=-0.45  [5e-4,5e-3]→ [1e-3, 4e-3]
+#           translate   r=+0.23  [0, 0.3]   → [0.05, 0.20]
+#           hsv_h       r=+0.23  [0, 0.03]  → [0.005, 0.025]
+#           flipud      r=+0.20  [0, 0.5]   → [0.0, 0.10]
+#           weight_decay         [0, 1e-3]  → [1e-6, 1e-4]
+#           dfl                  [0.8, 3.0] → [0.8, 1.5]
+#           mosaic               [0.5, 1.0] → [0.7, 1.0]
+#
+#     Espaço refined tem 15 hp (5 a menos), ~25% mais budget efetivo do GA
+#     por iteração + ranges menores → convergência mais rápida.
+#
+SEARCH_SPACE_WIDE = {
     # ---- Aprendizado ----
     "lr0":            (5e-4, 5e-3),        # narrow ao redor do que sabemos funcionar
     "lrf":            (0.005, 0.05),       # final/initial LR ratio
@@ -98,6 +129,51 @@ SEARCH_SPACE = {
 }
 
 
+SEARCH_SPACE_REFINED = {
+    # ---- Aprendizado (narrowed em torno do small winner lr0=2.33e-3) ----
+    "lr0":            (1e-3, 4e-3),
+    "lrf":            (0.005, 0.05),       # mantém range
+    "momentum":       (0.85, 0.95, 0.3),
+    "weight_decay":   (1e-6, 1e-4),        # narrow (small winner=1e-5; default 5e-4 ruim)
+    "warmup_epochs":  (1.0, 5.0),
+    # warmup_momentum: |r|<0.05 → fixo no default 0.8 (drop do search)
+
+    # ---- Pesos das losses (drops box; narrows dfl) ----
+    # box: |r|<0.05 → fixo no default 7.5 (drop)
+    "cls":            (0.2, 1.5),
+    "dfl":            (0.8, 1.5),           # narrow (small winner=1.12)
+
+    # ---- Augmentação de cor (narrow hsv_h em torno do high-signal) ----
+    "hsv_h":          (0.005, 0.025),       # narrow
+    "hsv_s":          (0.3, 0.9),
+    "hsv_v":          (0.2, 0.7),
+
+    # ---- Augmentação geométrica (drops degrees, scale, fliplr) ----
+    # degrees: |r|<0.05 → fixo no default 0 (drop)
+    "translate":      (0.05, 0.20),         # narrow (small winner=0.12)
+    # scale: |r|<0.05 → fixo no default 0.5 (drop)
+    # fliplr: |r|<0.05 → fixo no default 0.5 (drop)
+    "flipud":         (0.0, 0.10),          # narrow (small winner≈0)
+
+    # ---- Mixing augmentations (narrow mixup, copy_paste) ----
+    "mosaic":         (0.7, 1.0),           # narrow (small winner=1.0)
+    "mixup":          (0.0, 0.05),          # narrow drástico (r=-0.77)
+    "copy_paste":     (0.0, 0.05),          # narrow drástico (r=-0.67)
+}
+
+# Backward compat: nome antigo `SEARCH_SPACE` continua apontando para o wide.
+SEARCH_SPACE = SEARCH_SPACE_WIDE
+
+
+def get_search_space(name: str) -> dict:
+    """Retorna o search space pelo nome (`wide` | `refined`)."""
+    if name == "wide":
+        return SEARCH_SPACE_WIDE
+    if name == "refined":
+        return SEARCH_SPACE_REFINED
+    raise ValueError(f"--space inválido: {name!r}. Use 'wide' ou 'refined'.")
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="HPO do YOLO26-seg no ISIC 2018 Task 1 via model.tune().",
@@ -127,6 +203,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--device", default="0,1",
         help="GPUs (default: '0,1' para DDP). Use '0' para single GPU.",
+    )
+    p.add_argument(
+        "--space", choices=["wide", "refined"], default="wide",
+        help="Search space — 'wide' (20 hp, exploração inicial) ou 'refined' "
+             "(15 hp, drops sem-sinal e narrows alto-sinal; recomendado para "
+             "follow-up depois de uma rodada wide). Default: wide.",
     )
     return p.parse_args()
 
@@ -181,13 +263,15 @@ def main() -> None:
         verbose=False,              # output mais limpo entre trials
     )
 
+    space = get_search_space(args.space)
+
     print("=" * 72)
     print(f"HPO YOLO26-seg ({args.model}) — {args.iterations} iter × {args.epochs} ep/trial")
-    print(f"Search space: {len(SEARCH_SPACE)} hiperparâmetros")
+    print(f"Search space: {args.space!r} ({len(space)} hiperparâmetros)")
     print("=" * 72)
 
     model.tune(
-        space=SEARCH_SPACE,
+        space=space,
         iterations=args.iterations,
         use_ray=False,
         **fixed_v7,

@@ -23,8 +23,13 @@ Custo estimado (2× V100S, 30 iter × 30 ep cada):
                             facilmente dobrar.
 
 Uso:
-    # Todos os modelos (default):
+    # Espaço `wide` (default — exploração inicial em todos os 5 tamanhos):
     python tune_all_models.py
+
+    # Espaço `refined` (follow-up depois de uma rodada wide — drops 5 hp
+    # sem sinal e narrows os de alto sinal; recomendado para encontrar o
+    # ótimo de cada tamanho após o HPO inicial):
+    python tune_all_models.py --space refined --iterations 50
 
     # Subset:
     python tune_all_models.py --models nano small medium
@@ -37,6 +42,18 @@ Uso:
 
     # Color space alternativo:
     python tune_all_models.py --data /workspace/datasets/isic_2018_task1_yolo26_hed/data.yaml
+
+Workflow recomendado p/ encontrar o melhor hp por tamanho:
+    1. Rodada exploratória (wide):
+         python tune_all_models.py --models small
+    2. Inspecionar correlações no notebook analyze_hpo_results.ipynb
+         (decidir se REFINED é apropriado para o seu dataset).
+    3. Rodada refinada por tamanho:
+         python tune_all_models.py --space refined --iterations 50
+    4. Treino completo de cada tamanho com seu próprio hp campeão:
+         python train_with_tuned_hp.py --model nano
+         python train_with_tuned_hp.py --model small
+         ... (cada um lê best_hyperparameters.yaml específico)
 
 Em docker:
     docker run ... yolo26_ft \\
@@ -59,8 +76,13 @@ from pathlib import Path
 
 from ultralytics import YOLO
 
-# Reaproveita SEARCH_SPACE e WEIGHTS do script single-model
-from tune_isic_2018_task_1 import SEARCH_SPACE, WEIGHTS  # noqa: E402
+# Reaproveita search spaces e WEIGHTS do script single-model
+from tune_isic_2018_task_1 import (  # noqa: E402
+    SEARCH_SPACE_REFINED,
+    SEARCH_SPACE_WIDE,
+    WEIGHTS,
+    get_search_space,
+)
 
 DEFAULT_ORDER = ["nano", "small", "medium", "large", "xlarge"]
 
@@ -102,6 +124,12 @@ def parse_args() -> argparse.Namespace:
         "--force", action="store_true",
         help="Re-roda mesmo se best_hyperparameters.yaml já existir.",
     )
+    p.add_argument(
+        "--space", choices=["wide", "refined"], default="wide",
+        help="Search space — 'wide' (20 hp, exploração inicial) ou 'refined' "
+             "(15 hp, drops sem-sinal e narrows alto-sinal; recomendado para "
+             "follow-up por-tamanho após uma rodada wide). Default: wide.",
+    )
     return p.parse_args()
 
 
@@ -111,7 +139,8 @@ def parse_device(arg: str):
     return int(arg)
 
 
-def tune_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
+def tune_one_model(model_size: str, args: argparse.Namespace, device,
+                   space: dict) -> dict:
     """Roda model.tune() para um único tamanho. Retorna stats da execução."""
     run_name = f"tune_isic_2018_task_1_{model_size}"
     out_dir = Path(args.project) / run_name
@@ -164,7 +193,7 @@ def tune_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
     )
 
     model.tune(
-        space=SEARCH_SPACE,
+        space=space,
         iterations=args.iterations,
         use_ray=False,
         **fixed_v7,
@@ -183,12 +212,15 @@ def main() -> int:
     args = parse_args()
     device = parse_device(args.device)
 
+    space = get_search_space(args.space)
+
     print(f"HPO em sequência para: {args.models}")
     print(f"  iterations/model = {args.iterations}")
     print(f"  epochs/trial     = {args.epochs}")
     print(f"  device           = {device}")
     print(f"  data             = {args.data}")
     print(f"  project          = {args.project}")
+    print(f"  search space     = {args.space!r} ({len(space)} hp)")
     print(f"  force re-run     = {args.force}")
 
     summary: list[dict] = []
@@ -198,7 +230,7 @@ def main() -> int:
     for i, m in enumerate(args.models, 1):
         print(f"\n[{i}/{len(args.models)}] {m}")
         try:
-            stats = tune_one_model(m, args, device)
+            stats = tune_one_model(m, args, device, space)
             summary.append(stats)
             if stats["skipped"]:
                 print(f"  [skip] {stats['reason']}")
