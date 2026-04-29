@@ -89,7 +89,7 @@ docker run --gpus all -it --rm \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   yolo26_ft \
-  python /workspace/yolo26_seg/train_isic_2018_task_1_v8.py --model nano 2>&1 | tee logs/yolo26_nano_ft_isic_2018_v8.log
+  python /workspace/yolo26_seg/train_isic_2018_task_1_v8.py --model large 2>&1 | tee logs/yolo26_large_ft_isic_2018_v8.log
 
 
 docker run --gpus all -it --rm \
