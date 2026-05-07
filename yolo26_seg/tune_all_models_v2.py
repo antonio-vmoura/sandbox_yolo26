@@ -18,39 +18,39 @@ Uso:
     # Ignorar runs já completados (default: skip):
     python tune_all_models.py --force
     
------ WIDE -----
+    ----- WIDE -----
 
-docker run --gpus all -it --rm --ipc=host \
-  --user $(id -u):$(id -g) \
-  -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v $(pwd)/datasets:/workspace/datasets \
-  -v $(pwd)/logs:/workspace/logs \
-  -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
-  -v $(pwd)/utils:/workspace/utils \
-  -v $(pwd)/cache:/workspace/cache \
-  -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
-  yolo26_ft \
-  python /workspace/yolo26_seg/tune_all_models_v2.py \
-    --space wide --iterations 50 --models small \
-  2>&1 | tee logs/tune_all_models_v2.log  
+    docker run --gpus all -it --rm --ipc=host \
+    --user $(id -u):$(id -g) \
+    -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache \
+    -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    -v $(pwd)/datasets:/workspace/datasets \
+    -v $(pwd)/logs:/workspace/logs \
+    -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
+    -v $(pwd)/utils:/workspace/utils \
+    -v $(pwd)/cache:/workspace/cache \
+    -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
+    yolo26_ft \
+    python /workspace/yolo26_seg/tune_all_models_v2.py \
+        --space wide --iterations 50 --models small \
+    2>&1 | tee logs/tune_all_models_v2.log  
 
------ REFINED -----
+    ----- REFINED -----
 
-docker run --gpus all -it --rm --ipc=host \
-  --user $(id -u):$(id -g) \
-  -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v $(pwd)/datasets:/workspace/datasets \
-  -v $(pwd)/logs:/workspace/logs \
-  -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
-  -v $(pwd)/utils:/workspace/utils \
-  -v $(pwd)/cache:/workspace/cache \
-  -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
-  yolo26_ft \
-  python /workspace/yolo26_seg/tune_all_models_v2.py \
-    --space refined --iterations 50 \
-  2>&1 | tee logs/tune_all_refined.log
+    docker run --gpus all -it --rm --ipc=host \
+    --user $(id -u):$(id -g) \
+    -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache \
+    -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    -v $(pwd)/datasets:/workspace/datasets \
+    -v $(pwd)/logs:/workspace/logs \
+    -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
+    -v $(pwd)/utils:/workspace/utils \
+    -v $(pwd)/cache:/workspace/cache \
+    -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
+    yolo26_ft \
+    python /workspace/yolo26_seg/tune_all_models_v2.py \
+        --space refined --iterations 50 \
+    2>&1 | tee logs/tune_all_refined.log
   
 """
 

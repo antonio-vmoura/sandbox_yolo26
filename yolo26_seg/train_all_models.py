@@ -1,44 +1,31 @@
 """
-train_all_v9_models.py — Script unificado para fine-tuning do YOLO26-seg
-no ISIC 2018 Task 1 (Versão v9 — Per-size HPO-tuned).
-
-Este script junta a lógica de treino individual e a orquestração sequencial.
-Cada tamanho de modelo utiliza o seu próprio `best_hyperparameters.yaml` 
-encontrado via HPO independente.
-
-Filosofia:
-    * Sequencial — um tamanho por vez para maximizar os recursos da GPU.
-    * Idempotente — ignora tamanhos que já tenham `weights/best.pt` no 
-      diretório de saída (use `--force` para re-executar).
-    * Resiliente — continua a execução mesmo se um modelo falhar.
+train_all_models.py — Script unificado para fine-tuning do YOLO26-seg
+no ISIC 2018 Task 1
 
 Uso:
     # Treinar TODOS os 5 tamanhos sequencialmente (default):
-    python train_all_v9_models.py
+    python train_all_models.py
 
     # Treinar um subconjunto ou modelo específico:
-    python train_all_v9_models.py --models small medium
+    python train_all_models.py --models small medium
 
     # Forçar re-treino (mesmo que já exista o best.pt):
-    python train_all_v9_models.py --force
-    
+    python train_all_models.py --force
 
-docker run --gpus all -it --rm --ipc=host \
-  --user $(id -u):$(id -g) \
-  -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v $(pwd)/datasets:/workspace/datasets \
-  -v $(pwd)/logs:/workspace/logs \
-  -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
-  -v $(pwd)/utils:/workspace/utils \
-  -v $(pwd)/cache:/workspace/cache \
-  -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
-  yolo26_ft \
-  python /workspace/yolo26_seg/train_all_v9_models.py \
-    --space wide --iterations 50 --models small \
-  2>&1 | tee logs/v9_all_models.log
-
-
+    docker run --gpus all -it --rm --ipc=host \
+    --user $(id -u):$(id -g) \
+    -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache \
+    -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    -v $(pwd)/datasets:/workspace/datasets \
+    -v $(pwd)/logs:/workspace/logs \
+    -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
+    -v $(pwd)/utils:/workspace/utils \
+    -v $(pwd)/cache:/workspace/cache \
+    -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
+    yolo26_ft \
+    python /workspace/yolo26_seg/train_all_models.py \
+        --space wide --iterations 50 --models small \
+    2>&1 | tee logs/train_all_models_VERSION.log
 """
 
 import argparse
@@ -53,6 +40,8 @@ from ultralytics import YOLO
 # ----------------------------------------------------------------------------
 # CONFIGURAÇÕES GERAIS
 # ----------------------------------------------------------------------------
+VERSION = "v10"
+
 DEFAULT_ORDER = ["nano", "small", "medium", "large", "xlarge"]
 
 WEIGHTS = {
@@ -68,7 +57,7 @@ WEIGHTS = {
 # ----------------------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Treino v9 sequencial ou individual nos modelos YOLO26-seg.",
+        description="Treino sequencial ou individual nos modelos YOLO26-seg.",
     )
     p.add_argument(
         "--models", nargs="+", default=DEFAULT_ORDER, choices=DEFAULT_ORDER,
@@ -113,7 +102,7 @@ def load_tuned_hp(path: Path) -> dict:
 
 def train_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
     """Prepara as configurações e executa o treino para um único modelo."""
-    out_dir = Path(args.project) / f"yolo26_{model_size}_ft_isic_2018_v9"
+    out_dir = Path(args.project) / f"yolo26_{model_size}_ft_isic_2018_{VERSION}"
     best_pt = out_dir / "weights" / "best.pt"
     hp_yaml = (
         Path(args.project)
@@ -145,7 +134,7 @@ def train_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
     tuned_hp = load_tuned_hp(hp_yaml)
 
     print("\n" + "=" * 80)
-    print(f"=== INÍCIO DO TREINO v9: {model_size} (120 épocas × paciência 20)")
+    print(f"=== INÍCIO DO TREINO {VERSION}: {model_size} (120 épocas × paciência 20)")
     print(f"  HP Origem: {hp_yaml}")
     print(f"  Output   : {out_dir}")
     print("  Hiperparâmetros carregados:")
@@ -160,7 +149,7 @@ def train_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
     base_v7 = dict(
         data=args.data,
         project=args.project,
-        name=f"yolo26_{model_size}_ft_isic_2018_v9",
+        name=f"yolo26_{model_size}_ft_isic_2018_{VERSION}",
         task="segment",
         pretrained=True,
         imgsz=640,
@@ -201,7 +190,7 @@ def main() -> int:
     args = parse_args()
     device = parse_device(args.device)
 
-    print(f"Orquestração de Treino v9 para os modelos: {args.models}")
+    print(f"Orquestração de Treino {VERSION} para os modelos: {args.models}")
     print(f"  device       = {device}")
     print(f"  data         = {args.data}")
     print(f"  project      = {args.project}")
@@ -231,7 +220,7 @@ def main() -> int:
 
     # Resumo final da orquestração
     print("\n" + "=" * 80)
-    print("=== SUMÁRIO DO TREINO v9 (TODOS OS MODELOS)")
+    print(f"=== SUMÁRIO DO TREINO {VERSION} (TODOS OS MODELOS)")
     print("=" * 80)
     for s in summary:
         if s["skipped"]:
