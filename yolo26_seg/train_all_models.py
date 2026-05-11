@@ -23,8 +23,8 @@ Uso:
     -v $(pwd)/cache:/workspace/cache \
     -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
     yolo26_ft \
-    python yolo26_seg/train_all_models.py --models nano small medium large xlarge \
-    2>&1 | tee logs/train_all_models_small_v10.log
+    python yolo26_seg/train_all_models.py --models xlarge \
+    2>&1 | tee logs/train_all_models_xlarge_v11.log
 """
 
 import argparse
@@ -154,8 +154,8 @@ def train_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
         pretrained=True,
         imgsz=640,
         device=device,
-        batch=32,
-        workers=8,
+        batch=16,
+        workers=4,
         cache=False,
         amp=False,
         optimizer="MuSGD",

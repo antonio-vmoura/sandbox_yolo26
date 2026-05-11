@@ -1,90 +1,3 @@
-"""
-tune_all_models.py — Orquestra HPO (`model.tune()`) sequencialmente nos
-5 tamanhos de YOLO26-seg (nano, small, medium, large, xlarge) via algoritmo
-genético embutido no Ultralytics.
-
-Por que HPO e não NAS:
-    * NAS = busca sobre arquitetura (depth/width multipliers, blocos).
-    * HPO = busca sobre hiperparâmetros de treino (lr, momentum, augmentação).
-    * O que vem sendo discutido (rodar fine-tuning N vezes com configs
-      diferentes para encontrar a melhor) é HPO. NAS exigiria editar YAMLs
-      de arquitetura e treinar do zero — não é o que você precisa.
-
-Como funciona:
-    1. Treina o modelo `--epochs` épocas (curtas) com hiperparâmetros
-       atuais.
-    2. Calcula fitness = `metrics/mAP50-95(M+B)` (ponderado pelo Ultralytics).
-    3. Mantém top-K configs e gera novas via mutação gaussiana.
-    4. Repete por `--iterations` rodadas.
-    5. Salva `best_hyperparameters.yaml` no diretório de tune ao final.
-
-Filosofia:
-    * Mesmo espaço de busca para todos os tamanhos — comparação direta
-      depois.
-    * O que NÃO se tuna fica explícito no `model.tune()` (mesma config v7).
-    * O que SE tuna entra no `space=` com ranges narrow-ed para o ISIC.
-    * `device=[0,1]` (DDP) por padrão para acelerar.
-    * Skip automático: se `best_hyperparameters.yaml` já existe para um
-      tamanho, pula (idempotente — pode interromper e retomar).
-    * Log por modelo em `logs/tune_isic_2018_task_1_<model>.log`.
-
-Custo estimado (2× V100S, 30 iter × 30 ep cada):
-    nano   ≈  3-4h     (modelo pequeno, treina rápido por trial)
-    small  ≈  5-7h
-    medium ≈  8-12h
-    large  ≈ 12-18h
-    xlarge ≈ 18-30h
-    -----------------
-    total  ≈ 1.5-3 dias  → considere rodar overnight ou usar `--models`
-                            para subset. Em hardware mais lento pode
-                            facilmente dobrar.
-
-Uso:
-    # Espaço `wide` (default — exploração inicial em todos os 5 tamanhos):
-    python tune_all_models.py
-
-    # Espaço `refined` (follow-up depois de uma rodada wide — drops 5 hp
-    # sem sinal e narrows os de alto sinal; recomendado para encontrar o
-    # ótimo de cada tamanho após o HPO inicial):
-    python tune_all_models.py --space refined --iterations 50
-
-    # Subset:
-    python tune_all_models.py --models nano small medium
-
-    # Tune mais agressivo:
-    python tune_all_models.py --iterations 50 --epochs 40
-
-    # Ignorar runs já completados (default: skip):
-    python tune_all_models.py --force
-
-    # Color space alternativo:
-    python tune_all_models.py --data /workspace/datasets/isic_2018_task1_yolo26_hed/data.yaml
-
-Workflow recomendado p/ encontrar o melhor hp por tamanho:
-    1. Rodada exploratória (wide):
-         python tune_all_models.py --models small
-    2. Inspecionar correlações no notebook analyze_hpo_results.ipynb
-         (decidir se REFINED é apropriado para o seu dataset).
-    3. Rodada refinada por tamanho:
-         python tune_all_models.py --space refined --iterations 50
-    4. Treino completo de cada tamanho com seu próprio hp campeão:
-         python train_with_tuned_hp.py --model nano
-         python train_with_tuned_hp.py --model small
-         ... (cada um lê best_hyperparameters.yaml específico)
-
-Em docker:
-    docker run ... yolo26_ft \\
-      python /workspace/yolo26_seg/tune_all_models.py 2>&1 \\
-      | tee logs/tune_all_models.log
-
-Saídas (uma pasta por modelo em /workspace/logs/):
-    tune_isic_2018_task_1_<model>/
-      ├── best_hyperparameters.yaml   ← entrada do train_with_tuned_hp
-      ├── tune_results.ndjson         ← histórico de todos os trials
-      ├── tune_scatter_plot.png
-      └── tune_fitness.png
-"""
-
 import argparse
 import sys
 import time
@@ -133,7 +46,8 @@ WEIGHTS = {
 #
 #     Espaço refined tem 15 hp (5 a menos), ~25% mais budget efetivo do GA
 #     por iteração + ranges menores → convergência mais rápida.
-#
+
+
 SEARCH_SPACE_WIDE = {
     # ---- Aprendizado ----
     "lr0":            (5e-4, 5e-3),        # narrow ao redor do que sabemos funcionar
