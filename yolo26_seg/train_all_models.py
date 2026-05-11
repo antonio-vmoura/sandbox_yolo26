@@ -23,9 +23,8 @@ Uso:
     -v $(pwd)/cache:/workspace/cache \
     -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
     yolo26_ft \
-    python /workspace/yolo26_seg/train_all_models.py \
-        --space wide --iterations 50 --models small \
-    2>&1 | tee logs/train_all_models_VERSION.log
+    python yolo26_seg/train_all_models.py --models nano small medium large xlarge \
+    2>&1 | tee logs/train_all_models_small_v10.log
 """
 
 import argparse
@@ -40,7 +39,7 @@ from ultralytics import YOLO
 # ----------------------------------------------------------------------------
 # CONFIGURAÇÕES GERAIS
 # ----------------------------------------------------------------------------
-VERSION = "v10"
+VERSION = "v11"
 
 DEFAULT_ORDER = ["nano", "small", "medium", "large", "xlarge"]
 
@@ -106,6 +105,8 @@ def train_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
     best_pt = out_dir / "weights" / "best.pt"
     hp_yaml = (
         Path(args.project)
+        / "hpo"
+        / "hpo_v3"
         / f"tune_isic_2018_task_1_{model_size}"
         / "best_hyperparameters.yaml"
     )
@@ -145,8 +146,7 @@ def train_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
     t0 = time.perf_counter()
     model = YOLO(WEIGHTS[model_size])
 
-    # Base da v7 (parâmetros fixos para garantir comparabilidade)
-    base_v7 = dict(
+    base = dict(
         data=args.data,
         project=args.project,
         name=f"yolo26_{model_size}_ft_isic_2018_{VERSION}",
@@ -157,14 +157,14 @@ def train_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
         batch=32,
         workers=8,
         cache=False,
-        amp=True,
+        amp=False,
         optimizer="MuSGD",
         cos_lr=True,
-        close_mosaic=15,
-        erasing=0.0,
+        close_mosaic=10,
+        erasing=0.4,
         nbs=64,
         epochs=120,
-        patience=20,
+        patience=25,
         deterministic=True,
         seed=0,
         save=True,
@@ -172,9 +172,36 @@ def train_one_model(model_size: str, args: argparse.Namespace, device) -> dict:
         val=True,
         verbose=True,
     )
+    
+    # base = dict(
+    #     data=args.data,
+    #     project=args.project,
+    #     name=f"yolo26_{model_size}_ft_isic_2018_{VERSION}",
+    #     task="segment",
+    #     pretrained=True,
+    #     imgsz=640,
+    #     device=device,
+    #     batch=32,
+    #     workers=8,
+    #     cache=False,
+    #     amp=True,
+    #     optimizer="MuSGD",
+    #     cos_lr=True,
+    #     close_mosaic=15,
+    #     erasing=0.0,
+    #     nbs=64,
+    #     epochs=120,
+    #     patience=20,
+    #     deterministic=True,
+    #     seed=0,
+    #     save=True,
+    #     plots=True,
+    #     val=True,
+    #     verbose=True,
+    # )
 
-    # Mescla o base com os hp afiados (tuned_hp sobrepõe base_v7)
-    train_kwargs = {**base_v7, **tuned_hp}
+    # Mescla o base com os hp afiados (tuned_hp sobrepõe base)
+    train_kwargs = {**base, **tuned_hp}
     model.train(**train_kwargs)
     
     elapsed = (time.perf_counter() - t0) / 60
