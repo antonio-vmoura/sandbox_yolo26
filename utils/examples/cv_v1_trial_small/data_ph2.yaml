@@ -1,0 +1,7 @@
+path: /home/ubuntu/repos/sandbox_yolo26/datasets/ph2
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 1
+names: ['Skin-Lesions-Wb1v']
