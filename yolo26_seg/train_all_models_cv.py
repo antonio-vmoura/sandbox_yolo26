@@ -58,8 +58,8 @@ import time
 import traceback
 from pathlib import Path
 
+import numpy as np
 import yaml
-from sklearn.model_selection import KFold
 from ultralytics import YOLO
 
 # ----------------------------------------------------------------------------
@@ -186,24 +186,40 @@ def build_kfold_splits(
 ) -> list[tuple[list[Path], list[Path]]]:
     """Gera ``k`` splits determinísticos sobre o pool de imagens.
 
-    Retorna uma lista de tuplas ``(train_images, val_images)``, uma por fold.
-    O embaralhamento usa ``shuffle=True`` + ``random_state=seed`` para
-    reprodutibilidade total (mesmo seed → mesmos splits).
+    Implementação equivalente a ``sklearn.model_selection.KFold(shuffle=True,
+    random_state=seed)`` porém sem dependência externa de scikit-learn:
+    embaralha os índices com ``numpy.random.RandomState(seed)`` (mesmo RNG
+    usado pela sklearn) e distribui em ``k`` blocos consecutivos onde os
+    primeiros ``n % k`` blocos têm um elemento extra. Mesmo seed → mesmos
+    conjuntos por fold (verificado contra ``KFold`` ref.).
     """
     if k < 2:
         raise ValueError(f"k_folds deve ser >= 2 (recebido: {k}).")
-    if len(pairs) < k:
+    n = len(pairs)
+    if n < k:
         raise ValueError(
-            f"Pool com {len(pairs)} imagens é menor que k={k}. "
+            f"Pool com {n} imagens é menor que k={k}. "
             f"Reduza --k-folds ou aumente o dataset.",
         )
     images = [p[0] for p in pairs]
-    kf = KFold(n_splits=k, shuffle=True, random_state=seed)
+
+    rng = np.random.RandomState(seed)
+    indices = np.arange(n)
+    rng.shuffle(indices)
+
+    fold_sizes = np.full(k, n // k, dtype=int)
+    fold_sizes[: n % k] += 1
+
     splits: list[tuple[list[Path], list[Path]]] = []
-    for train_idx, val_idx in kf.split(images):
-        train_imgs = [images[i] for i in train_idx]
-        val_imgs = [images[i] for i in val_idx]
-        splits.append((train_imgs, val_imgs))
+    start = 0
+    for size in fold_sizes:
+        stop = start + size
+        val_idx = indices[start:stop]
+        train_idx = np.concatenate([indices[:start], indices[stop:]])
+        splits.append(
+            ([images[i] for i in train_idx], [images[i] for i in val_idx]),
+        )
+        start = stop
     return splits
 
 
