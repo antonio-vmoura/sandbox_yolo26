@@ -153,5 +153,5 @@ docker run --gpus all -it --rm --ipc=host \
   -v $(pwd)/cache:/workspace/cache \
   -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
   yolo26_ft \
-  python /workspace/yolo26_seg/train_all_models_cv.py --models small \
-  2>&1 | tee logs/train_all_models_cv_small_v1.log
+  python /workspace/yolo26_seg/train_all_models_cv.py --models nano medium large xlarge \
+  2>&1 | tee logs/train_all_models_cv_all_less_small_v1.log
