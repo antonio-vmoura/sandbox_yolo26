@@ -198,22 +198,39 @@ by `yolo26_seg/collect_phase_metrics.py`.
 
 ### Recommended Logs Layout
 
+Every artefact of a pipeline run is isolated under
+`logs/<PIPELINE_NAME>/` (default `logs/pipeline_e2e_v1/`) so it does **not**
+mix with the previous standalone fine-tunings that live directly under
+`logs/`. Change `PIPELINE_NAME` (env var or `--pipeline-name`) to start a
+fresh run alongside the previous one.
+
 ```
 logs/
-├── phase1_baseline/
-│   └── yolo26_<model>_baseline/{weights/best.pt, results.csv, args.yaml, ...}
-├── hpo/
-│   └── hpo_v3/tune_isic_2018_task_1_<model>/best_hyperparameters.yaml
-├── yolo26_<model>_ft_isic_2018_v11/{weights/best.pt, results.csv, ...}    # Phase 3
-├── cv/
-│   └── cv_v1/yolo26_<model>_cv_isic_2018/{splits/, runs/,
-│       metrics_per_fold.csv, metrics_summary.json}
-├── pipeline_summary/
-│   ├── baseline_metrics.{csv,json}
-│   ├── optimized_metrics.{csv,json}
-│   └── cv_consolidated.{csv,json}
-└── pipeline_runs/<UTC-timestamp>/{pipeline.log, phase1.log, phase2.log, ...}
+├── pipeline_e2e_v1/                                 # ← PIPELINE_NAME
+│   ├── phase1_baseline/
+│   │   └── yolo26_<model>_baseline/{weights/best.pt, results.csv, args.yaml, ...}
+│   ├── hpo/
+│   │   └── hpo_v3/tune_isic_2018_task_1_<model>/best_hyperparameters.yaml
+│   ├── yolo26_<model>_ft_isic_2018_v11/{weights/best.pt, results.csv, ...}    # Phase 3
+│   ├── cv/
+│   │   └── cv_v1/yolo26_<model>_cv_isic_2018/{splits/, runs/,
+│   │       metrics_per_fold.csv, metrics_summary.json}
+│   ├── pipeline_summary/
+│   │   ├── baseline_metrics.{csv,json}
+│   │   ├── optimized_metrics.{csv,json}
+│   │   └── cv_consolidated.{csv,json}
+│   └── pipeline_runs/<UTC-timestamp>/{pipeline.log, phase1.log, phase2.log, ...}
+│
+├── pipeline_e2e_v2/                                 # ← a future re-run
+│   └── ...
+└── <legacy standalone runs, untouched>              # e.g. yolo26_small_ft_isic_2018_v11/
 ```
+
+The nested layout is automatic: the orchestrator passes
+`--project /workspace/logs/<PIPELINE_NAME>` to every Python helper, so
+all sub-folders (`phase1_baseline/`, `hpo/hpo_v3/`,
+`yolo26_<model>_ft_isic_2018_v11/`, `cv/cv_v1/`, `pipeline_summary/`,
+`pipeline_runs/`) end up inside the same isolated parent.
 
 ### Idempotency
 
@@ -242,6 +259,7 @@ Then run the orchestrator with explicit GPU allocation
 
 ```bash
 GPU_DEVICE_IDS="0,1"
+PIPELINE_NAME="pipeline_e2e_v1"   # rename for each new isolated run
 
 docker run --gpus "\"device=${GPU_DEVICE_IDS}\"" -it --rm \
     --ipc=host \
@@ -250,6 +268,7 @@ docker run --gpus "\"device=${GPU_DEVICE_IDS}\"" -it --rm \
     -e HOME=/workspace/cache \
     -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     -e GPU_DEVICE_IDS="${GPU_DEVICE_IDS}" \
+    -e PIPELINE_NAME="${PIPELINE_NAME}" \
     -v "$(pwd)/datasets:/workspace/datasets" \
     -v "$(pwd)/logs:/workspace/logs" \
     -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
@@ -260,8 +279,13 @@ docker run --gpus "\"device=${GPU_DEVICE_IDS}\"" -it --rm \
     -v /etc/group:/etc/group:ro \
     yolo26_ft \
     bash /workspace/run_pipeline.sh \
-    2>&1 | tee "logs/pipeline_$(date -u +%Y%m%dT%H%M%SZ).log"
+    2>&1 | tee "logs/${PIPELINE_NAME}_$(date -u +%Y%m%dT%H%M%SZ).log"
 ```
+
+The Docker bind-mount `-v "$(pwd)/logs:/workspace/logs"` is the **parent
+`LOGS_ROOT`** — every pipeline run will write into a sub-directory of
+that mount (`logs/${PIPELINE_NAME}/...`), so previous standalone HPO/CV/FT
+artefacts already in `logs/` stay untouched.
 
 Selecting a subset of phases or models:
 
@@ -274,6 +298,12 @@ bash /workspace/run_pipeline.sh --models "n s"
 
 # Dry-run (prints commands only):
 bash /workspace/run_pipeline.sh --dry-run
+
+# Run an ablation under a separate folder so it doesn't touch the previous one:
+bash /workspace/run_pipeline.sh --pipeline-name pipeline_e2e_v2 --force
+
+# Use a completely custom project path (overrides PIPELINE_NAME):
+bash /workspace/run_pipeline.sh --project /workspace/logs/my_experiment
 ```
 
 Useful environment overrides (defaults shown):
@@ -281,7 +311,9 @@ Useful environment overrides (defaults shown):
 | Variable | Default | Description |
 |---|---|---|
 | `DATA_YAML` | `/workspace/datasets/isic_2018_task1_yolo26/data.yaml` | Dataset YAML (Ultralytics/Roboflow format). |
-| `PROJECT` | `/workspace/logs` | Logs root. |
+| `LOGS_ROOT` | `/workspace/logs` | Parent dir for every pipeline run. |
+| `PIPELINE_NAME` | `pipeline_e2e_v1` | Sub-dir under `LOGS_ROOT` that isolates THIS run from previous standalone fine-tunings (HPO/CV/FT) already living directly under `LOGS_ROOT`. |
+| `PROJECT` | `${LOGS_ROOT}/${PIPELINE_NAME}` | Final project root passed to every Python helper. Override (env or `--project`) to point anywhere else. |
 | `GPU_DEVICE_IDS` | `0,1` | Comma-separated GPU IDs (DDP). |
 | `P1_EPOCHS` / `P1_PATIENCE` | `120` / `20` | Baseline (Phase 1). |
 | `HPO_SPACE` / `HPO_ITERATIONS` / `HPO_EPOCHS_PER_TRIAL` / `HPO_PATIENCE` | `refined` / `30` / `30` / `10` | HPO (Phase 2). |

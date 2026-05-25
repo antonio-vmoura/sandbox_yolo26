@@ -23,7 +23,20 @@ set -euo pipefail
 
 # ---------- Defaults ---------------------------------------------------------
 DATA_YAML="${DATA_YAML:-/workspace/datasets/isic_2018_task1_yolo26/data.yaml}"
-PROJECT="${PROJECT:-/workspace/logs}"
+# Isolate this pipeline's outputs under a dedicated sub-directory of LOGS_ROOT
+# so they don't get mixed with previous standalone runs (HPO, CV, FT) that
+# already live directly under /workspace/logs/. Override PIPELINE_NAME to start
+# a fresh run (e.g. pipeline_e2e_v2) without touching the previous artefacts.
+LOGS_ROOT="${LOGS_ROOT:-/workspace/logs}"
+PIPELINE_NAME="${PIPELINE_NAME:-pipeline_e2e_v1}"
+# Detect whether PROJECT was pre-set via env var so we don't silently
+# clobber it during the LOGS_ROOT/PIPELINE_NAME recomposition below.
+if [[ -n "${PROJECT:-}" ]]; then
+    PROJECT_FORCED=1
+else
+    PROJECT_FORCED=0
+fi
+PROJECT="${PROJECT:-${LOGS_ROOT}/${PIPELINE_NAME}}"
 GPU_DEVICE_IDS="${GPU_DEVICE_IDS:-0,1}"
 MODELS_DEFAULT=(nano small medium large xlarge)
 MODELS=("${MODELS_DEFAULT[@]}")
@@ -68,7 +81,15 @@ Options:
                               Accepts {nano,small,medium,large,xlarge} or
                               {n,s,m,l,x}. Default: all five.
   --data PATH                 Override data.yaml path. (env: DATA_YAML)
-  --project PATH              Override logs/project root. (env: PROJECT)
+  --logs-root PATH            Parent dir for all pipeline runs.
+                              (env: LOGS_ROOT, default /workspace/logs)
+  --pipeline-name NAME        Sub-directory under LOGS_ROOT that isolates
+                              THIS run's artefacts from any previous training
+                              that lives directly under LOGS_ROOT.
+                              (env: PIPELINE_NAME, default pipeline_e2e_v1)
+  --project PATH              Explicit project root (overrides the
+                              LOGS_ROOT/PIPELINE_NAME composition).
+                              (env: PROJECT)
   --device "0,1"              GPU IDs passed to Ultralytics (DDP comma-sep).
                               (env: GPU_DEVICE_IDS)
   --force                     Pass --force to each underlying script.
@@ -76,19 +97,25 @@ Options:
   -h, --help                  Show this help and exit.
 
 Environment variables (override defaults):
-  DATA_YAML, PROJECT, GPU_DEVICE_IDS, P1_EPOCHS, P1_PATIENCE,
+  DATA_YAML, LOGS_ROOT, PIPELINE_NAME, PROJECT, GPU_DEVICE_IDS,
+  P1_EPOCHS, P1_PATIENCE,
   HPO_SPACE, HPO_ITERATIONS, HPO_EPOCHS_PER_TRIAL, HPO_PATIENCE,
   CV_K_FOLDS, CV_SEED, CV_EPOCHS, CV_PATIENCE
 EOF
 }
 
 # ---------- CLI parsing ------------------------------------------------------
+# Track whether --project was passed explicitly (takes precedence over
+# LOGS_ROOT/PIPELINE_NAME composition).
+PROJECT_EXPLICIT=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --phases) read -r -a PHASES <<<"$2"; shift 2 ;;
         --models) read -r -a MODELS <<<"$2"; shift 2 ;;
         --data) DATA_YAML="$2"; shift 2 ;;
-        --project) PROJECT="$2"; shift 2 ;;
+        --logs-root) LOGS_ROOT="$2"; shift 2 ;;
+        --pipeline-name) PIPELINE_NAME="$2"; shift 2 ;;
+        --project) PROJECT="$2"; PROJECT_EXPLICIT=1; shift 2 ;;
         --device) GPU_DEVICE_IDS="$2"; shift 2 ;;
         --force) FORCE_FLAG="--force"; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
@@ -96,6 +123,12 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
     esac
 done
+
+# Recompose PROJECT from LOGS_ROOT/PIPELINE_NAME unless --project was given
+# explicitly (and PROJECT env var was NOT pre-set before invocation).
+if [[ "${PROJECT_EXPLICIT}" -eq 0 && "${PROJECT_FORCED}" -eq 0 ]]; then
+    PROJECT="${LOGS_ROOT}/${PIPELINE_NAME}"
+fi
 
 # Normalize model short aliases (n,s,m,l,x) to canonical names.
 declare -A MODEL_ALIAS=(
@@ -120,14 +153,16 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" | tee -a "${PIPELINE_LOG
 log "=============================================================="
 log "YOLO26-seg ISIC 2018 Task 1 — End-to-End Pipeline"
 log "=============================================================="
-log "  data         = ${DATA_YAML}"
-log "  project      = ${PROJECT}"
-log "  device       = ${GPU_DEVICE_IDS}"
-log "  models       = ${MODELS[*]}"
-log "  phases       = ${PHASES[*]}"
-log "  force        = ${FORCE_FLAG:-<off>}"
-log "  yolo_seg_dir = ${YOLO_SEG_DIR}"
-log "  pipeline_log = ${PIPELINE_LOG}"
+log "  data           = ${DATA_YAML}"
+log "  logs_root      = ${LOGS_ROOT}"
+log "  pipeline_name  = ${PIPELINE_NAME}"
+log "  project        = ${PROJECT}"
+log "  device         = ${GPU_DEVICE_IDS}"
+log "  models         = ${MODELS[*]}"
+log "  phases         = ${PHASES[*]}"
+log "  force          = ${FORCE_FLAG:-<off>}"
+log "  yolo_seg_dir   = ${YOLO_SEG_DIR}"
+log "  pipeline_log   = ${PIPELINE_LOG}"
 log "--------------------------------------------------------------"
 
 run_cmd() {
