@@ -167,3 +167,124 @@ nvtop
 ```
 
 ---
+
+## End-to-End Pipeline (`run_pipeline.sh`)
+
+The master orchestrator `run_pipeline.sh` chains the four phases of the
+ISIC 2018 Task 1 study for all five YOLO26-seg sizes (n, s, m, l, x):
+
+1. **Phase 1 — Baseline:** strict Ultralytics defaults, `epochs=120`,
+   `patience=20`, `deterministic=True`, `seed=0`.
+   Implemented by `yolo26_seg/train_baseline_models.py`.
+2. **Phase 2 — HPO:** per-model `model.tune()` using the refined search
+   space from session `21d1...`. Implemented by
+   `yolo26_seg/tune_all_models_v2.py`. Outputs are written to
+   `<project>/hpo/hpo_v3/tune_isic_2018_task_1_<model>/best_hyperparameters.yaml`,
+   which is the path expected by Phases 3 and 4.
+3. **Phase 3 — Optimized single-split:** full fine-tuning using the
+   `best_hyperparameters.yaml` from Phase 2 (120 epochs, `MuSGD`,
+   cosine LR, `patience=25`). Implemented by
+   `yolo26_seg/train_all_models.py`.
+4. **Phase 4 — 5-Fold Cross-Validation:** deterministic NumPy-only KFold
+   (`seed=0`, K=5) over the train+val pool of the original
+   `data.yaml` (test split untouched). Implemented by
+   `yolo26_seg/train_all_models_cv.py`. Final consolidation
+   (mean ± std for mAP@50, mAP@50-95, Precision, Recall, F1-Score —
+   Box and Mask) is produced by
+   `yolo26_seg/consolidate_cv_results.py`.
+
+Single-split summaries (Phases 1 and 3) are extracted from `results.csv`
+by `yolo26_seg/collect_phase_metrics.py`.
+
+### Recommended Logs Layout
+
+```
+logs/
+├── phase1_baseline/
+│   └── yolo26_<model>_baseline/{weights/best.pt, results.csv, args.yaml, ...}
+├── hpo/
+│   └── hpo_v3/tune_isic_2018_task_1_<model>/best_hyperparameters.yaml
+├── yolo26_<model>_ft_isic_2018_v11/{weights/best.pt, results.csv, ...}    # Phase 3
+├── cv/
+│   └── cv_v1/yolo26_<model>_cv_isic_2018/{splits/, runs/,
+│       metrics_per_fold.csv, metrics_summary.json}
+├── pipeline_summary/
+│   ├── baseline_metrics.{csv,json}
+│   ├── optimized_metrics.{csv,json}
+│   └── cv_consolidated.{csv,json}
+└── pipeline_runs/<UTC-timestamp>/{pipeline.log, phase1.log, phase2.log, ...}
+```
+
+### Idempotency
+
+Each Python script already detects existing artefacts:
+
+* `train_baseline_models.py` skips models with an existing `best.pt`.
+* `tune_all_models_v2.py` skips models with an existing
+  `best_hyperparameters.yaml`.
+* `train_all_models.py` skips models with an existing `best.pt`.
+* `train_all_models_cv.py` skips folds and models with an existing
+  `results.csv` / `metrics_summary.json`.
+
+Pass `--force` to the orchestrator (or set `FORCE_FLAG=--force`) to
+re-execute every phase.
+
+### Running the pipeline inside Docker
+
+Build the image once:
+
+```bash
+docker build -t yolo26_ft .
+```
+
+Then run the orchestrator with explicit GPU allocation
+(`{GPU_DEVICE_IDS}` is a placeholder — substitute with e.g. `"0,1"`):
+
+```bash
+GPU_DEVICE_IDS="0,1"
+
+docker run --gpus "\"device=${GPU_DEVICE_IDS}\"" -it --rm \
+    --ipc=host \
+    --user "$(id -u):$(id -g)" \
+    -e TORCH_HOME=/workspace/cache/torch \
+    -e HOME=/workspace/cache \
+    -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    -e GPU_DEVICE_IDS="${GPU_DEVICE_IDS}" \
+    -v "$(pwd)/datasets:/workspace/datasets" \
+    -v "$(pwd)/logs:/workspace/logs" \
+    -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
+    -v "$(pwd)/utils:/workspace/utils" \
+    -v "$(pwd)/cache:/workspace/cache" \
+    -v "$(pwd)/run_pipeline.sh:/workspace/run_pipeline.sh:ro" \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
+    yolo26_ft \
+    bash /workspace/run_pipeline.sh \
+    2>&1 | tee "logs/pipeline_$(date -u +%Y%m%dT%H%M%SZ).log"
+```
+
+Selecting a subset of phases or models:
+
+```bash
+# Only run HPO + Optimized + CV (skip Phase 1 baseline):
+bash /workspace/run_pipeline.sh --phases "2 3 4"
+
+# Only nano and small, all four phases:
+bash /workspace/run_pipeline.sh --models "n s"
+
+# Dry-run (prints commands only):
+bash /workspace/run_pipeline.sh --dry-run
+```
+
+Useful environment overrides (defaults shown):
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATA_YAML` | `/workspace/datasets/isic_2018_task1_yolo26/data.yaml` | Dataset YAML (Ultralytics/Roboflow format). |
+| `PROJECT` | `/workspace/logs` | Logs root. |
+| `GPU_DEVICE_IDS` | `0,1` | Comma-separated GPU IDs (DDP). |
+| `P1_EPOCHS` / `P1_PATIENCE` | `120` / `20` | Baseline (Phase 1). |
+| `HPO_SPACE` / `HPO_ITERATIONS` / `HPO_EPOCHS_PER_TRIAL` / `HPO_PATIENCE` | `refined` / `30` / `30` / `10` | HPO (Phase 2). |
+| `CV_K_FOLDS` / `CV_SEED` / `CV_EPOCHS` / `CV_PATIENCE` | `5` / `0` / `120` / `25` | Cross-Validation (Phase 4). |
+
+---
