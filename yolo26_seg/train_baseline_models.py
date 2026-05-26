@@ -3,11 +3,18 @@ train_baseline_models.py — Phase 1 (Baseline) do pipeline YOLO26-seg
 no ISIC 2018 Task 1.
 
 Treina sequencialmente os 5 tamanhos (nano, small, medium, large, xlarge)
-usando **estritamente os hiperparâmetros padrão do Ultralytics** (sem
-otimizador customizado, sem augmentations agressivas e sem HP tunados):
-apenas `epochs=120`, `patience=20`, `deterministic=True`, `seed=0` são
-fixados para reprodutibilidade e para alinhar com o protocolo das fases
-seguintes do pipeline.
+usando **os hiperparâmetros padrão do Ultralytics** (sem otimizador
+customizado, sem augmentations agressivas e sem HP tunados): apenas
+`epochs=120`, `patience=20`, `deterministic=True`, `seed=0` são fixados
+para reprodutibilidade e para alinhar com o protocolo das fases seguintes
+do pipeline.
+
+NB: AMP (mixed-precision) está **desabilitado por padrão** (`amp=False`)
+para todas as variantes desde a observação de overflow FP16 na variante
+xlarge (NaN na cls-loss). Isto é um desvio explícito do default do
+Ultralytics (`amp=True`) feito em prol da **uniformidade experimental**
+entre tamanhos arquiteturais e da **invariância de hardware**. Use
+`--amp` para reativar pontualmente.
 
 Saídas:
     ``<project>/phase1_baseline/yolo26_<model>_baseline/{weights, results.csv, ...}``
@@ -102,6 +109,15 @@ def parse_args() -> argparse.Namespace:
         help="Semente determinística (default: 0).",
     )
     p.add_argument(
+        "--amp", action="store_true",
+        help=(
+            "Ativa Automatic Mixed Precision (FP16). Default: desativado, "
+            "para garantir uniformidade entre tamanhos arquiteturais e "
+            "evitar overflow FP16 que gera NaN no cls-loss da variante "
+            "xlarge (observado empiricamente no ISIC 2018 Task 1)."
+        ),
+    )
+    p.add_argument(
         "--force", action="store_true",
         help="Re-executa mesmo se o ficheiro best.pt já existir.",
     )
@@ -143,14 +159,15 @@ def train_one_baseline(model_size: str, args: argparse.Namespace, device) -> dic
     print(f"  data       = {args.data}")
     print(f"  device     = {device}")
     print(f"  output     = {out_dir}")
+    print(f"  amp        = {args.amp}  (Ultralytics default = True; desativado aqui p/ uniformidade)")
     print("  HP         = Ultralytics defaults (sem otimizador customizado / sem HP tunados)")
     print("=" * 80)
 
     t0 = time.perf_counter()
     model = YOLO(weights_path)
 
-    # Estritamente defaults: NÃO sobrescrever optimizer, cos_lr, amp, etc.
-    # Apenas fixar a infra mínima necessária para reprodutibilidade.
+    # Defaults Ultralytics — não sobrescrevemos optimizer, cos_lr, etc.
+    # AMP é o único desvio explícito do default (desativado por padrão).
     model.train(
         data=args.data,
         project=str(run_root),
@@ -161,6 +178,7 @@ def train_one_baseline(model_size: str, args: argparse.Namespace, device) -> dic
         device=device,
         epochs=args.epochs,
         patience=args.patience,
+        amp=args.amp,
         deterministic=True,
         seed=args.seed,
         save=True,
@@ -188,6 +206,7 @@ def main() -> int:
     print(f"  project      = {args.project}")
     print(f"  epochs       = {args.epochs}  patience = {args.patience}")
     print(f"  seed         = {args.seed}  imgsz = {args.imgsz}")
+    print(f"  amp          = {args.amp}")
     print(f"  force re-run = {args.force}")
 
     summary: list[dict] = []

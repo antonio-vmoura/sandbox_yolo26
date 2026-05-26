@@ -236,8 +236,12 @@ def tune_one_model(model_size: str, args: argparse.Namespace, device, space: dic
         workers=8,
         cache=False,
         
-        # Otimização (fixa do v7)
-        amp=True,
+        # Otimização (fixa do v7).
+        # NB: AMP desativado para uniformidade com as demais fases
+        # (Phases 1, 3 e 4 também rodam com amp=False). Evita overflow
+        # FP16 em variantes grandes (xlarge) — observado empiricamente
+        # como cls-loss → NaN no ISIC 2018 Task 1.
+        amp=False,
         optimizer="MuSGD",
         cos_lr=True,
         close_mosaic=15,

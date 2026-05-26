@@ -173,8 +173,10 @@ nvtop
 The master orchestrator `run_pipeline.sh` chains the four phases of the
 ISIC 2018 Task 1 study for all five YOLO26-seg sizes (n, s, m, l, x):
 
-1. **Phase 1 — Baseline:** strict Ultralytics defaults, `epochs=120`,
-   `patience=20`, `deterministic=True`, `seed=0`.
+1. **Phase 1 — Baseline:** Ultralytics defaults, `epochs=120`,
+   `patience=20`, `deterministic=True`, `seed=0`, `amp=False`
+   (single explicit deviation from the Ultralytics default — see
+   [reproducibility note](#a-note-on-amp-mixed-precision) below).
    Implemented by `yolo26_seg/train_baseline_models.py`.
 2. **Phase 2 — HPO:** per-model `model.tune()` using the refined search
    space from session `21d1...`. Implemented by
@@ -231,6 +233,35 @@ The nested layout is automatic: the orchestrator passes
 all sub-folders (`phase1_baseline/`, `hpo/hpo_v3/`,
 `yolo26_<model>_ft_isic_2018_v11/`, `cv/cv_v1/`, `pipeline_summary/`,
 `pipeline_runs/`) end up inside the same isolated parent.
+
+### A note on AMP (mixed precision)
+
+All four phases run with **`amp=False`** (FP32 throughout). This is a
+deliberate, **uniform** deviation from the Ultralytics default
+(`amp=True`) for Phases 1 and 2 — Phases 3 and 4 were already FP32 in
+the upstream scripts.
+
+Rationale (defensible for publication):
+
+* During an earlier run on the GPU host, the **xlarge** variant produced
+  `NaN` in the classification loss at epoch 42 with `amp=True` —
+  consistent with an FP16 overflow in the cls-head that the AMP gradient
+  scaler did not catch. The Ultralytics auto-recovery then failed because
+  the saved `last.pt` checkpoint was already post-overflow.
+* Rather than disable AMP only for the failing variant (an asymmetric
+  fix that would weaken the cross-architecture comparison), we disable
+  AMP for **all five sizes** so that every model is trained under
+  numerically identical conditions.
+* Side benefit: FP32 results are invariant across Tensor Core
+  generations, strengthening hardware-independent reproducibility.
+
+Trade-off: ~30–40 % more GPU time vs. AMP across Phases 1 and 2; VRAM
+footprint roughly doubles (xlarge observed at ~10.8 GB with AMP; expect
+~14–16 GB FP32 — verify your GPU has headroom or reduce `batch`).
+
+Pass `--amp` to `train_baseline_models.py` to re-enable mixed precision
+for a specific Phase 1 run (e.g. when reproducing the original
+Ultralytics-default behaviour for an ablation).
 
 ### Idempotency
 
