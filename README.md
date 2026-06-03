@@ -263,6 +263,81 @@ Pass `--amp` to `train_baseline_models.py` to re-enable mixed precision
 for a specific Phase 1 run (e.g. when reproducing the original
 Ultralytics-default behaviour for an ablation).
 
+### A note on batch size (Phase 2 HPO on xlarge)
+
+Phases 1, 3 and 4 train every variant with `batch=16` (`nbs=64`,
+gradient accumulation 4 → **effective optimisation batch = 64**).
+Phase 2 HPO uses `batch=32` (`nbs=64`, gradient accumulation 2 →
+**also effective optimisation batch = 64**) for the nano, small,
+medium and large variants.
+
+For the **xlarge** variant, FP32 + DDP + `batch=32` does not fit in
+the 32 GB V100S (observed: 31.59 GB allocated per rank before the
+1st training iteration → `torch.OutOfMemoryError`). HPO trials for
+xlarge therefore use `batch=16` (`nbs=64` unchanged → accumulation 4),
+matching the protocol already used in Phases 1, 3 and 4 for xlarge.
+
+The orchestrator exposes this as `--hpo-batch` (CLI) / `HPO_BATCH`
+(env, default `32`). Example invocations:
+
+```bash
+# Default — applies to nano/small/medium/large
+bash run_pipeline.sh --phases "2" --models "nano small medium large"
+
+# xlarge — 32 GB GPUs require batch=16 under FP32+DDP
+bash run_pipeline.sh --phases "2 3 4" --models "xlarge" --hpo-batch 16
+# or via env:
+HPO_BATCH=16 bash run_pipeline.sh --phases "2 3 4" --models "xlarge"
+```
+
+**Why this preserves comparability between models:**
+
+* Ultralytics computes `accumulate = round(nbs/batch)` and accumulates
+  gradients across that many micro-batches before each optimiser
+  step. With `nbs=64` held constant, the **effective optimisation
+  batch is identical (64) for every variant and every phase**,
+  regardless of whether `batch=32` or `batch=16` is used at the
+  micro-step level.
+* The hyperparameter space being searched (`lr0`, `lrf`, `momentum`,
+  `weight_decay`, `cls`, `dfl`, augmentation strengths) operates on
+  the optimiser step — so the HPs discovered for xlarge are directly
+  comparable to those found for the other four variants at the same
+  effective batch size.
+* The only difference is per-step VRAM footprint and the number of
+  micro-batches forwarded between optimiser updates — neither of
+  which affects the gradient step magnitude or the loss-curve shape
+  at fixed effective batch.
+
+Suggested wording for the Methods section of a paper:
+
+> *Due to VRAM constraints on the V100S (32 GB), the xlarge variant
+> uses `batch=16` during HPO (vs. `batch=32` for the four smaller
+> variants); for the optimised fine-tuning and the 5-fold
+> cross-validation, all variants use `batch=16`. The nominal batch
+> size (`nbs=64`) is held constant across all phases and variants,
+> so the effective optimisation batch size is identical (64) across
+> the entire study. This affects only the micro-batch composition
+> and per-step memory footprint, not the gradient-step magnitude.*
+
+### Pipeline hardening: GPU sanity-check and HPO validity check
+
+Two safety checks added to the orchestrator after an earlier run hit
+infrastructure-level failures invisible to the trainer:
+
+1. **`gpu_sanity_check`** runs at the start of every phase (~1 s):
+   verifies that `nvidia-smi -L` reports GPUs **and** that
+   `torch.cuda.is_available()` returns `True`. If the driver died on
+   the host (e.g. an `nvidia.ko`/NVML hang after a long FP32 run),
+   the script aborts immediately with an actionable message instead
+   of wasting minutes inside the trainer.
+2. **`check_hpo_validity.py`** runs after Phase 2 and inspects every
+   `tune_results.csv` produced by Ultralytics' Tuner. If any model
+   has fewer than `--min-trials` rows with `fitness>0`, the pipeline
+   fails with a non-zero exit code. This catches **degenerate HPO**
+   runs — when the Tuner records `fitness=0` for failed trials and
+   silently emits a `best_hyperparameters.yaml` that is just the
+   seed vector (which we observed at scale after a driver crash).
+
 ### Idempotency
 
 Each Python script already detects existing artefacts:

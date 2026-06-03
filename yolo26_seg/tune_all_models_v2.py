@@ -171,6 +171,16 @@ def parse_args() -> argparse.Namespace:
         help="Early-stopping patience por trial (default: 10).",
     )
     p.add_argument(
+        "--batch", type=int, default=32,
+        help=(
+            "Micro-batch por GPU por trial (default: 32). Reduza para 16 "
+            "quando rodar HPO do xlarge em FP32 (amp=False) em GPUs de 32 GB "
+            "\u2014 com nbs=64 o batch efetivo do step de otimiza\u00e7\u00e3o continua sendo "
+            "64 (gradient accumulation cobre a diferen\u00e7a), preservando a "
+            "validade dos HPs encontrados em rela\u00e7\u00e3o aos demais modelos."
+        ),
+    )
+    p.add_argument(
         "--data",
         default="/workspace/datasets/isic_2018_task1_yolo26/data.yaml",
         help="Path do data.yaml.",
@@ -232,7 +242,11 @@ def tune_one_model(model_size: str, args: argparse.Namespace, device, space: dic
         
         # Hardware
         device=device,
-        batch=32,
+        # Micro-batch configurado via CLI (default 32).
+        # Em conjunto com nbs=64 (abaixo), o batch efetivo do step de
+        # otimização é mantido em 64 independente desse valor
+        # (accumulate = round(nbs/batch)).
+        batch=args.batch,
         workers=8,
         cache=False,
         
@@ -283,6 +297,7 @@ def main() -> int:
     print(f"HPO para: {args.models}")
     print(f"  iterations/model = {args.iterations}")
     print(f"  epochs/trial     = {args.epochs}")
+    print(f"  batch/trial      = {args.batch}  (nbs=64 \u2014 effective optim batch fixed at 64)")
     print(f"  device           = {device}")
     print(f"  data             = {args.data}")
     print(f"  project          = {args.project}")
