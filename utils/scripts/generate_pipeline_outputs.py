@@ -1,20 +1,28 @@
-"""
-Generate 4 publication-ready figures showing the journey of a single lesion
-(ISIC_0000052) through the fundamental computational tasks in skin-cancer
-image analysis:
+"""Generate publication-ready figures illustrating the dermoscopy CV pipeline.
 
-    1. Lesion segmentation  ->  out_lesion_segmentation.png
-    2. Attribute segmentation ->  out_attribute_segmentation.png
-    3. Binary classification  ->  out_binary_classification.png
-    4. Multi-class classification -> out_multiclass_classification.png
+The script walks a single lesion (``ISIC_0000052``) through the four
+fundamental computational tasks in skin-cancer image analysis and emits a
+separate PNG for each. All outputs share the input image dimensions so they
+can be laid out uniformly inside a LaTeX figure.
 
-All four outputs share the same dimensions as the input image so they can be
-laid out uniformly in a LaTeX figure.
+Outputs (written to ``./outputs/``):
+
+    1. ``out_lesion_segmentation.png``       (lesion mask overlay)
+    2. ``out_attribute_segmentation.png``    (dermoscopic-attribute masks)
+    3. ``out_binary_classification.png``     (benign vs. malignant banner)
+    4. ``out_multiclass_classification.png`` (3-class probability panel)
+
+Usage:
+    python utils/scripts/generate_pipeline_outputs.py
+
+Inputs are expected under ``utils/scripts/inputs/`` with the naming pattern
+``ISIC_0000052*.png/.jpg`` (see :data:`ATTRIBUTES` for the full list).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Tuple
 
 import cv2
 import numpy as np
@@ -51,6 +59,17 @@ ATTRIBUTES = [
 # Helpers
 # --------------------------------------------------------------------------- #
 def load_rgb(path: Path) -> np.ndarray:
+    """Read an image from disk as an RGB ``np.ndarray``.
+
+    Args:
+        path: Path to the image (any format OpenCV can decode).
+
+    Returns:
+        HxWx3 ``uint8`` RGB array.
+
+    Raises:
+        FileNotFoundError: If ``path`` cannot be read.
+    """
     img = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(path)
@@ -58,6 +77,17 @@ def load_rgb(path: Path) -> np.ndarray:
 
 
 def load_mask(path: Path) -> np.ndarray:
+    """Read a binary segmentation mask.
+
+    Args:
+        path: Path to a single-channel PNG.
+
+    Returns:
+        HxW ``uint8`` array in {0, 1} (threshold = 127).
+
+    Raises:
+        FileNotFoundError: If ``path`` cannot be read.
+    """
     m = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if m is None:
         raise FileNotFoundError(path)
@@ -65,6 +95,14 @@ def load_mask(path: Path) -> np.ndarray:
 
 
 def find_font(size: int) -> ImageFont.FreeTypeFont:
+    """Return the first available system font, falling back to the default.
+
+    Args:
+        size: Font size in pixels.
+
+    Returns:
+        A ``PIL.ImageFont`` instance.
+    """
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -77,8 +115,18 @@ def find_font(size: int) -> ImageFont.FreeTypeFont:
 
 
 def overlay_color(image: np.ndarray, mask: np.ndarray,
-                  color: tuple[int, int, int], alpha: float) -> np.ndarray:
-    """Alpha-blend `color` onto `image` only where mask == 1."""
+                  color: Tuple[int, int, int], alpha: float) -> np.ndarray:
+    """Alpha-blend a flat colour onto ``image`` wherever ``mask == 1``.
+
+    Args:
+        image: HxWx3 ``uint8`` RGB image.
+        mask: HxW binary mask in {0, 1}.
+        color: Target colour as an ``(r, g, b)`` triple.
+        alpha: Blend amount in ``[0, 1]``.
+
+    Returns:
+        New HxWx3 ``uint8`` image (input is not mutated).
+    """
     out = image.copy()
     if mask.sum() == 0:
         return out
@@ -90,7 +138,18 @@ def overlay_color(image: np.ndarray, mask: np.ndarray,
 
 
 def draw_contour(image: np.ndarray, mask: np.ndarray,
-                 color: tuple[int, int, int], thickness: int) -> np.ndarray:
+                 color: Tuple[int, int, int], thickness: int) -> np.ndarray:
+    """Draw mask contours on a copy of ``image``.
+
+    Args:
+        image: HxWx3 ``uint8`` RGB image.
+        mask: HxW binary mask.
+        color: Contour colour ``(r, g, b)``.
+        thickness: Line thickness in pixels.
+
+    Returns:
+        New HxWx3 ``uint8`` image with the contours drawn.
+    """
     contours, _ = cv2.findContours(
         mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
     )
@@ -99,16 +158,33 @@ def draw_contour(image: np.ndarray, mask: np.ndarray,
     return out
 
 
-def rounded_rect(draw: ImageDraw.ImageDraw, xy, radius: int, fill, outline=None,
-                 width: int = 1) -> None:
+def rounded_rect(
+    draw: ImageDraw.ImageDraw,
+    xy: Tuple[int, int, int, int],
+    radius: int,
+    fill,
+    outline=None,
+    width: int = 1,
+) -> None:
+    """Thin wrapper around :meth:`PIL.ImageDraw.ImageDraw.rounded_rectangle`."""
     draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline,
                            width=width)
 
 
-def paste_translucent_panel(pil_img: Image.Image, box: tuple[int, int, int, int],
-                            fill: tuple[int, int, int, int],
-                            radius: int) -> None:
-    """Draw a rounded translucent panel directly onto pil_img (RGB)."""
+def paste_translucent_panel(
+    pil_img: Image.Image,
+    box: Tuple[int, int, int, int],
+    fill: Tuple[int, int, int, int],
+    radius: int,
+) -> None:
+    """Draw a rounded translucent panel directly onto ``pil_img``.
+
+    Args:
+        pil_img: Target PIL image (must be RGBA-composable).
+        box: Panel bounding box ``(x0, y0, x1, y1)``.
+        fill: RGBA tuple defining the panel colour and opacity.
+        radius: Corner radius in pixels.
+    """
     overlay = Image.new("RGBA", pil_img.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
     rounded_rect(d, box, radius=radius, fill=fill)
@@ -119,6 +195,15 @@ def paste_translucent_panel(pil_img: Image.Image, box: tuple[int, int, int, int]
 # 1. Lesion segmentation
 # --------------------------------------------------------------------------- #
 def make_lesion_segmentation(image: np.ndarray, lesion_mask: np.ndarray) -> np.ndarray:
+    """Render the lesion-segmentation figure (mask overlay + contour + label).
+
+    Args:
+        image: HxWx3 ``uint8`` RGB image.
+        lesion_mask: HxW binary mask of the lesion.
+
+    Returns:
+        New HxWx3 ``uint8`` RGB array with the overlay applied.
+    """
     overlay_rgb = (0, 200, 255)        # cyan-blue fill
     contour_rgb = (0, 120, 255)        # solid blue outline
 
@@ -150,10 +235,20 @@ def make_lesion_segmentation(image: np.ndarray, lesion_mask: np.ndarray) -> np.n
 # --------------------------------------------------------------------------- #
 # 2. Attribute segmentation
 # --------------------------------------------------------------------------- #
-def make_attribute_segmentation(image: np.ndarray,
-                                attrs: list[tuple[str, np.ndarray,
-                                                  tuple[int, int, int]]]
-                                ) -> np.ndarray:
+def make_attribute_segmentation(
+    image: np.ndarray,
+    attrs: list[tuple[str, np.ndarray, Tuple[int, int, int]]],
+) -> np.ndarray:
+    """Render the dermoscopic-attribute figure (one overlay per attribute).
+
+    Args:
+        image: HxWx3 ``uint8`` RGB image.
+        attrs: List of ``(name, mask, color)`` tuples for each attribute.
+            Only attributes with a non-empty mask appear in the legend.
+
+    Returns:
+        New HxWx3 ``uint8`` RGB image.
+    """
     out = image.copy()
     for _, mask, color in attrs:
         if mask.sum() == 0:
@@ -203,8 +298,22 @@ def make_attribute_segmentation(image: np.ndarray,
 # --------------------------------------------------------------------------- #
 # 3. Binary classification banner
 # --------------------------------------------------------------------------- #
-def make_binary_classification(image: np.ndarray, label: str = "Malignant",
-                               confidence: float = 0.93) -> np.ndarray:
+def make_binary_classification(
+    image: np.ndarray,
+    label: str = "Malignant",
+    confidence: float = 0.93,
+) -> np.ndarray:
+    """Render the binary-classification figure (label + confidence banner).
+
+    Args:
+        image: HxWx3 ``uint8`` RGB image.
+        label: Predicted class string. ``"Malignant"`` selects a crimson
+            accent; any other value selects green.
+        confidence: Softmax confidence in ``[0, 1]``.
+
+    Returns:
+        New HxWx3 ``uint8`` RGB image.
+    """
     pil = Image.fromarray(image).convert("RGBA")
     H, W = image.shape[:2]
 
@@ -260,6 +369,14 @@ def make_binary_classification(image: np.ndarray, label: str = "Malignant",
 # 4. Multi-class classification panel
 # --------------------------------------------------------------------------- #
 def make_multiclass_classification(image: np.ndarray) -> np.ndarray:
+    """Render the multi-class classification panel (3 illustrative probs).
+
+    Args:
+        image: HxWx3 ``uint8`` RGB image used as the canvas.
+
+    Returns:
+        New HxWx3 ``uint8`` RGB image.
+    """
     # Skin-cancer 3-class set (illustrative probabilities)
     classes = [
         ("Melanoma", 0.78),
@@ -340,6 +457,7 @@ def make_multiclass_classification(image: np.ndarray) -> np.ndarray:
 # Main
 # --------------------------------------------------------------------------- #
 def main() -> None:
+    """Generate all four figures and write them under ``OUT_DIR``."""
     image = load_rgb(ORIGINAL_PATH)
     lesion_mask = load_mask(LESION_MASK_PATH)
     attrs = [(name, load_mask(p), color) for name, p, color in ATTRIBUTES]
