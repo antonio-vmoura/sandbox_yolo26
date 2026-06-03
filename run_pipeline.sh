@@ -51,6 +51,12 @@ HPO_SPACE="${HPO_SPACE:-refined}"
 HPO_ITERATIONS="${HPO_ITERATIONS:-30}"
 HPO_EPOCHS_PER_TRIAL="${HPO_EPOCHS_PER_TRIAL:-30}"
 HPO_PATIENCE="${HPO_PATIENCE:-10}"
+# Micro-batch por trial. Default 32 (mantém o comportamento histórico dos
+# HPOs já executados para nano/small/medium/large). Use 16 para o xlarge em
+# FP32 (amp=False) em GPUs de 32 GB — com nbs=64 (gradient accumulation) o
+# batch efetivo do step de otimização continua sendo 64 para qualquer valor
+# escolhido aqui, preservando a comparabilidade entre modelos.
+HPO_BATCH="${HPO_BATCH:-32}"
 
 # Phase 4 (CV)
 CV_K_FOLDS="${CV_K_FOLDS:-5}"
@@ -92,6 +98,10 @@ Options:
                               (env: PROJECT)
   --device "0,1"              GPU IDs passed to Ultralytics (DDP comma-sep).
                               (env: GPU_DEVICE_IDS)
+  --hpo-batch INT             Micro-batch per trial for Phase 2 HPO
+                              (default: 32). Use 16 for xlarge in FP32 on
+                              32 GB GPUs — nbs=64 keeps the effective optim
+                              batch at 64. (env: HPO_BATCH)
   --force                     Pass --force to each underlying script.
   --dry-run                   Print commands without executing them.
   -h, --help                  Show this help and exit.
@@ -99,7 +109,7 @@ Options:
 Environment variables (override defaults):
   DATA_YAML, LOGS_ROOT, PIPELINE_NAME, PROJECT, GPU_DEVICE_IDS,
   P1_EPOCHS, P1_PATIENCE,
-  HPO_SPACE, HPO_ITERATIONS, HPO_EPOCHS_PER_TRIAL, HPO_PATIENCE,
+  HPO_SPACE, HPO_ITERATIONS, HPO_EPOCHS_PER_TRIAL, HPO_PATIENCE, HPO_BATCH,
   CV_K_FOLDS, CV_SEED, CV_EPOCHS, CV_PATIENCE
 EOF
 }
@@ -117,6 +127,7 @@ while [[ $# -gt 0 ]]; do
         --pipeline-name) PIPELINE_NAME="$2"; shift 2 ;;
         --project) PROJECT="$2"; PROJECT_EXPLICIT=1; shift 2 ;;
         --device) GPU_DEVICE_IDS="$2"; shift 2 ;;
+        --hpo-batch) HPO_BATCH="$2"; shift 2 ;;
         --force) FORCE_FLAG="--force"; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -150,6 +161,49 @@ PIPELINE_LOG="${PIPELINE_LOG_DIR}/pipeline.log"
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" | tee -a "${PIPELINE_LOG}"; }
 
+# ---------- GPU sanity check -------------------------------------------------
+# Verifica, em <1 s, se o driver NVIDIA e o torch.cuda ainda estão saudáveis
+# antes de cada fase. Necessário porque uma queda do nvidia.ko (NVRM/NVML) no
+# host durante um run longo (observado no pipeline_e2e_v2 após ~21 h de FP32)
+# faz com que as fases subsequentes morram com erros crípticos
+# (``Can't initialize NVML`` + ``torch.cuda.is_available()=False``) e o
+# script atual gastaria minutos até falhar dentro do trainer. Falhar cedo,
+# aqui, evita esse desperdício e dá uma mensagem acionável.
+#
+# Em modo --dry-run, a checagem é pulada (não há GPU envolvida).
+gpu_sanity_check() {
+    local tag="$1"
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+        log "    [gpu_sanity_check:${tag}] pulado (dry-run)"
+        return 0
+    fi
+    log "    [gpu_sanity_check:${tag}] verificando driver NVIDIA e torch.cuda..."
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        log "    [gpu_sanity_check:${tag}] FALHOU — 'nvidia-smi' não está no PATH dentro do container."
+        log "    Verifique a flag --gpus do 'docker run' e a instalação do NVIDIA Container Toolkit no host."
+        return 10
+    fi
+    if ! nvidia-smi -L >/dev/null 2>&1; then
+        log "    [gpu_sanity_check:${tag}] FALHOU — 'nvidia-smi -L' não retornou GPUs (driver caiu?)."
+        log "    Recupere o driver no host (rmmod/modprobe nvidia* ou reboot) e re-execute o pipeline."
+        return 11
+    fi
+    if ! python - <<'PY' >/dev/null 2>&1
+import sys
+import torch
+sys.exit(0 if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else 1)
+PY
+    then
+        log "    [gpu_sanity_check:${tag}] FALHOU — torch.cuda.is_available() retornou False."
+        log "    Sintoma clássico de NVML quebrado. Recupere o driver no host e re-execute."
+        return 12
+    fi
+    local n_gpus
+    n_gpus=$(nvidia-smi -L | wc -l)
+    log "    [gpu_sanity_check:${tag}] OK — ${n_gpus} GPU(s) visíveis para torch.cuda."
+    return 0
+}
+
 log "=============================================================="
 log "YOLO26-seg ISIC 2018 Task 1 — End-to-End Pipeline"
 log "=============================================================="
@@ -160,6 +214,7 @@ log "  project        = ${PROJECT}"
 log "  device         = ${GPU_DEVICE_IDS}"
 log "  models         = ${MODELS[*]}"
 log "  phases         = ${PHASES[*]}"
+log "  hpo_batch      = ${HPO_BATCH}  (nbs=64 keeps effective optim batch at 64)"
 log "  force          = ${FORCE_FLAG:-<off>}"
 log "  yolo_seg_dir   = ${YOLO_SEG_DIR}"
 log "  pipeline_log   = ${PIPELINE_LOG}"
@@ -198,6 +253,7 @@ has_phase() {
 if has_phase 1; then
     log ""
     log "### Phase 1 — Baseline training (Ultralytics defaults, ${P1_EPOCHS} ep, patience=${P1_PATIENCE})"
+    gpu_sanity_check phase1 || exit $?
     run_cmd phase1 python "${YOLO_SEG_DIR}/train_baseline_models.py" \
         --models "${MODELS[@]}" \
         --data "${DATA_YAML}" \
@@ -218,6 +274,7 @@ fi
 if has_phase 2; then
     log ""
     log "### Phase 2 — HPO via model.tune() (space=${HPO_SPACE}, iters=${HPO_ITERATIONS}, ep/trial=${HPO_EPOCHS_PER_TRIAL})"
+    gpu_sanity_check phase2 || exit $?
     # Redireciona o output do tuner para o diretório esperado por
     # train_all_models.py e train_all_models_cv.py:
     #   <project>/hpo/hpo_v3/tune_isic_2018_task_1_<model>/best_hyperparameters.yaml
@@ -232,13 +289,23 @@ if has_phase 2; then
         --iterations "${HPO_ITERATIONS}" \
         --epochs "${HPO_EPOCHS_PER_TRIAL}" \
         --patience "${HPO_PATIENCE}" \
+        --batch "${HPO_BATCH}" \
         ${FORCE_FLAG}
+
+    # Validação obrigatória: o Tuner da Ultralytics não propaga falhas de
+    # trial. Esta checagem detecta HPO degenerado (todos os trials com
+    # fitness=0) — sintoma típico de queda do driver NVIDIA durante a fase.
+    log "### Phase 2 — Validating HPO outputs (detectando trials degenerados)"
+    run_cmd phase2_validate python "${YOLO_SEG_DIR}/check_hpo_validity.py" \
+        --project "${PROJECT}" \
+        --models "${MODELS[@]}"
 fi
 
 # ---------- Phase 3 — Optimized single-split --------------------------------
 if has_phase 3; then
     log ""
     log "### Phase 3 — Optimized single-split fine-tuning (uses best_hyperparameters.yaml)"
+    gpu_sanity_check phase3 || exit $?
     run_cmd phase3 python "${YOLO_SEG_DIR}/train_all_models.py" \
         --models "${MODELS[@]}" \
         --data "${DATA_YAML}" \
@@ -257,6 +324,7 @@ fi
 if has_phase 4; then
     log ""
     log "### Phase 4 — ${CV_K_FOLDS}-Fold CV (seed=${CV_SEED}, ${CV_EPOCHS} ep, patience=${CV_PATIENCE})"
+    gpu_sanity_check phase4 || exit $?
     run_cmd phase4 python "${YOLO_SEG_DIR}/train_all_models_cv.py" \
         --models "${MODELS[@]}" \
         --data "${DATA_YAML}" \
