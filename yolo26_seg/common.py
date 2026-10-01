@@ -22,8 +22,13 @@ augmentation) are therefore the **only** difference between the two.
 Documented deviations from the Ultralytics defaults (applied uniformly to
 every phase):
 
-* ``epochs=120`` (default 100) and ``patience=25`` (default 100) — identical
-  training budget for Phases 1, 2 and 4.
+* ``epochs=120`` (default 100) and ``patience=120`` (default 100), i.e. **no
+  early stopping** — identical training budget for Phases 1, 2 and 4 (HPO
+  trials: 30 epochs, patience 30). Every run completes its cosine LR schedule
+  and the ``close_mosaic`` epochs: with patience 25, the noisy 100-image
+  validation split (median epoch-to-epoch fitness change 0.04-0.06, vs 0.014
+  on a 530-image CV fold) stopped every Phase 1 run at epochs 50-82, still at
+  a high learning rate, and selected ``best.pt`` on a noise spike.
 * ``amp=False`` (default True) — the xlarge variant overflowed in FP16 (NaN in
   the cls-loss); FP32 everywhere keeps numerical conditions uniform across
   architectures.
@@ -89,15 +94,30 @@ DEFAULT_PIPELINE_ROOT: str = "/workspace/logs/pipeline_final_v1"
 #: Global seed for every RNG in the pipeline (training, K-Fold, HPO mutation).
 SEED: int = 0
 
-#: Training budget shared by Phases 1, 2 and 4.
+#: Training budget shared by Phases 1, 2 and 4 (patience = epochs: no early stopping).
 TRAIN_EPOCHS: int = 120
-TRAIN_PATIENCE: int = 25
+TRAIN_PATIENCE: int = 120
+
+#: Phase 3 per-trial budget (patience = epochs: every trial completes its schedule).
+HPO_EPOCHS: int = 30
+HPO_PATIENCE: int = 30
 
 #: Pinned protocol values (equal to the Ultralytics defaults).
 IMGSZ: int = 640
 BATCH: int = 16
 NBS: int = 64
 WORKERS: int = 8
+
+#: Micro-batch that actually fits each model in FP32 at 640 px on a 32 GB
+#: V100S (Phase 1 peaks at batch 16: nano 5.4, small 10.7, medium 21.6,
+#: large 24.7 GB; xlarge needs ~40 GB at 16 and peaks at 20.2 GB at 8).
+#: Ultralytics silently halves the batch after a CUDA OOM in the first epoch,
+#: so xlarge trains at 8 in Phases 1, 2 and 4 although ``BATCH`` is 16 (the
+#: batch really used is recorded as ``batch_effective``). HPO trials use this
+#: table so they run at the same micro-batch as the final training and never
+#: rely on the silent fallback. With ``nbs=64`` the effective optimisation
+#: batch is 64 for every value; only the BatchNorm batch statistics differ.
+MICRO_BATCH: dict[str, int] = {"nano": 16, "small": 16, "medium": 16, "large": 16, "xlarge": 8}
 
 #: Fixed base setup shared by EVERY phase (Baseline, HPO trials, Optimised).
 #: Never searched by the HPO and never overridden by tuned HPs.
@@ -432,11 +452,17 @@ def config_hash(payload: Any) -> str:
 
 @contextmanager
 def exclusive_lock(directory: Path, name: str = ".lock") -> Iterator[None]:
-    """Hold a non-blocking exclusive ``flock`` on ``directory/name``.
+    """Hold a non-blocking exclusive POSIX lock (``lockf``) on ``directory/name``.
 
     Prevents two processes from writing the same run (e.g. a manual re-run
-    while the orchestrator is still training). The lock is released
-    automatically if the process dies.
+    while the orchestrator is still training).
+
+    ``lockf`` (not ``flock``): a POSIX record lock belongs to the *process*,
+    is not inherited by ``fork()``-ed children and is released as soon as the
+    process dies. With ``flock`` the lock belongs to the open file, which
+    forked DataLoader workers inherit; after a ``kill -9`` of the trainer the
+    orphaned workers kept the run locked and an immediate restart was refused
+    until they exited.
 
     Raises:
         RuntimeError: If another process already holds the lock.
@@ -445,13 +471,13 @@ def exclusive_lock(directory: Path, name: str = ".lock") -> Iterator[None]:
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / name).open("w") as fh:
         try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as e:
+            fcntl.lockf(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
             raise RuntimeError(f"another process is already working in {directory}") from e
         try:
             yield
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            fcntl.lockf(fh, fcntl.LOCK_UN)
 
 
 def sha256_file(path: Path, chunk: int = 1 << 20) -> str:

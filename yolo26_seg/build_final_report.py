@@ -123,6 +123,11 @@ class Report:
                     continue
                 if row.get("resumed"):
                     self.warnings.append(f"{phase}/{row['model']}: training was resumed after an interruption")
+                if row.get("batch_effective") is not None and row.get("batch_effective") != row.get("batch_requested"):
+                    self.warnings.append(
+                        f"{phase}/{row['model']}: trained with micro-batch {row['batch_effective']} instead of "
+                        f"{row['batch_requested']} (Ultralytics out-of-memory fallback; nbs keeps the effective "
+                        f"batch) — disclose in the paper")
                 for k in INSTANCE_KEYS + ("best_epoch", "epochs_trained"):
                     self.add(phase, variant, row["model"], "val", "fp32", k, row.get(k))
         for m in self.models:

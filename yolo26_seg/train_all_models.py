@@ -3,7 +3,7 @@
 Trains each variant **once** on the standard train/val split with the
 hyperparameters found in Phase 3, via :func:`common.optimized_protocol`:
 
-* the Phase 1 protocol (same ``epochs=120``, ``patience=25``, ``amp=False``,
+* the Phase 1 protocol (same ``epochs=120``, ``patience=120``, ``amp=False``,
   ``batch=16``/``nbs=64``, ``seed=0``) — identical budget to the Baseline;
 * the fixed optimisation recipe (``MuSGD``, cosine LR, ``close_mosaic=10``),
   identical to the one every HPO trial used;
