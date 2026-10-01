@@ -57,9 +57,10 @@ Usage:
 
     # Re-run the same command after a crash: it resumes automatically.
 
-    # xlarge in FP32 on 32 GB GPUs (nbs=64 keeps the effective batch at 64)::
+    # The micro-batch per trial defaults to common.MICRO_BATCH (the batch each
+    # model really trains with in FP32 on a 32 GB GPU: 16, xlarge 8). Override::
 
-        python tune_all_models_v2.py --models xlarge --batch 16
+        python tune_all_models_v2.py --models small --batch 32
 
     # Extend a finished 30-trial search to 50 trials (same config)::
 
@@ -91,6 +92,9 @@ from common import (
     DEFAULT_DATA_YAML,
     DEFAULT_ORDER,
     DEFAULT_PIPELINE_ROOT,
+    HPO_EPOCHS,
+    HPO_PATIENCE,
+    MICRO_BATCH,
     PROTECTED_KEYS,
     SEED,
     WEIGHTS,
@@ -622,18 +626,20 @@ def parse_args() -> argparse.Namespace:
         help="Target number of trials per model (default: 30). Raising it later extends the search.",
     )
     p.add_argument(
-        "--epochs", type=int, default=30,
-        help="Epochs per trial (default: 30).",
+        "--epochs", type=int, default=HPO_EPOCHS,
+        help=f"Epochs per trial (default: {HPO_EPOCHS}).",
     )
     p.add_argument(
-        "--patience", type=int, default=10,
-        help="Early-stopping patience per trial (default: 10).",
+        "--patience", type=int, default=HPO_PATIENCE,
+        help=f"Early-stopping patience per trial (default: {HPO_PATIENCE} = no early stopping).",
     )
     p.add_argument(
-        "--batch", type=int, default=32,
+        "--batch", type=int, default=None,
         help=(
-            "Micro-batch per trial (default: 32). Use 16 for xlarge in FP32 on "
-            "32 GB GPUs — nbs=64 keeps the effective optimisation batch at 64."
+            "Micro-batch per trial (default: common.MICRO_BATCH per model — 16, xlarge 8 — "
+            "the batch each model really trains with in FP32 on a 32 GB GPU; a batch that "
+            "does not fit is silently halved by Ultralytics). nbs=64 keeps the effective "
+            "optimisation batch at 64."
         ),
     )
     p.add_argument(
@@ -749,7 +755,8 @@ def tune_one_model(
     tune_dir = paths.phase3_tune_dir(model_size)
     csv_path = paths.phase3_results_csv(model_size)
     trials_dir = tune_dir / "trials"
-    fixed = hpo_trial_protocol(args.data, device, args.epochs, args.patience, args.batch)
+    batch = args.batch or MICRO_BATCH[model_size]
+    fixed = hpo_trial_protocol(args.data, device, args.epochs, args.patience, batch)
     config = _hashed_config(model_size, args, space, fixed)
     expected_header = ",".join(["fitness", *space.keys()])
 
@@ -848,7 +855,8 @@ def _print_run_header(
     print(f"Phase 3 (HPO) for: {args.models}")
     print(f"  trials/model     = {args.iterations}   (max retries per failed trial = {args.max_trial_retries})")
     print(f"  epochs/trial     = {args.epochs}   patience = {args.patience}")
-    print(f"  batch/trial      = {args.batch}  (nbs=64 — effective optim batch fixed at 64)")
+    batch = args.batch or ", ".join(f"{m} {MICRO_BATCH[m]}" for m in args.models)
+    print(f"  batch/trial      = {batch}  (nbs=64 — effective optim batch fixed at 64)")
     print(f"  search space     = {args.space!r} ({len(space)} hp)   seed = {args.seed}")
     print(f"  device           = {device}")
     print(f"  data             = {args.data}")

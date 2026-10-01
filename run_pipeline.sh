@@ -16,7 +16,8 @@
 #                                    report in <project>/summary/)
 #
 # Every phase shares one base setup (MuSGD, cos_lr, nbs=64, close_mosaic=10,
-# amp=False, seed=0; epochs=120 / patience=25 for Phases 1, 2 and 4), defined
+# amp=False, seed=0; epochs=120 / patience=120 = no early stopping, for
+# Phases 1, 2 and 4; HPO trials 30 / 30), defined
 # once in yolo26_seg/common.py, so the tuned hyperparameters are the only
 # variable between Baseline (default HPs) and Optimised (tuned HPs).
 #
@@ -54,7 +55,7 @@ MODELS=("${MODELS_DEFAULT[@]}")
 PHASES=(1 2 3 4 5)
 
 # Training budget of Phases 1, 2 and 4 (empty = defaults in common.py:
-# 120 epochs / patience 25). Override ONLY for smoke tests — the same values
+# 120 epochs / patience 120). Override ONLY for smoke tests — the same values
 # are always passed to all three phases.
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-}"
 TRAIN_PATIENCE="${TRAIN_PATIENCE:-}"
@@ -67,11 +68,12 @@ CV_SEED="${CV_SEED:-0}"
 HPO_SPACE="${HPO_SPACE:-refined}"
 HPO_ITERATIONS="${HPO_ITERATIONS:-30}"
 HPO_EPOCHS_PER_TRIAL="${HPO_EPOCHS_PER_TRIAL:-30}"
-HPO_PATIENCE="${HPO_PATIENCE:-10}"
-# Micro-batch por trial. Default 32 (comportamento histórico). Use 16 para o
-# xlarge em FP32 em GPUs de 32 GB — com nbs=64 o batch efetivo do passo de
-# otimização continua 64 para qualquer valor, preservando a comparabilidade.
-HPO_BATCH="${HPO_BATCH:-32}"
+HPO_PATIENCE="${HPO_PATIENCE:-30}"   # = epochs per trial: no early stopping
+# Micro-batch por trial. Vazio (default) = common.MICRO_BATCH por modelo (16;
+# xlarge 8): o mesmo micro-batch com que cada modelo realmente treina em FP32
+# numa GPU de 32 GB — um batch que não cabe é reduzido silenciosamente pelo
+# Ultralytics. Com nbs=64 o batch efetivo do passo de otimização é 64 sempre.
+HPO_BATCH="${HPO_BATCH:-}"
 # Retry loop on exit code 75 (GPU/driver unavailable): number of retries after
 # the first attempt, and the wait (seconds) between attempts.
 HPO_MAX_RETRIES="${HPO_MAX_RETRIES:-5}"
@@ -110,8 +112,8 @@ Options:
   --device "0,1"              GPU IDs for training (DDP). (env: GPU_DEVICE_IDS)
   --bench-device ID           Single GPU for Phase 5. (env: BENCH_DEVICE,
                               default: first ID of --device)
-  --hpo-batch INT             Micro-batch per HPO trial (default 32; use 16 for
-                              xlarge in FP32 on 32 GB GPUs). (env: HPO_BATCH)
+  --hpo-batch INT             Micro-batch per HPO trial (default: per model,
+                              common.MICRO_BATCH — 16, xlarge 8). (env: HPO_BATCH)
   --epochs INT / --patience INT
                               Smoke-test budget for Phases 1, 2 AND 4 together.
                               (env: TRAIN_EPOCHS / TRAIN_PATIENCE)
@@ -294,15 +296,15 @@ log "  project        = ${PROJECT}"
 log "  device         = ${GPU_DEVICE_IDS}   (Phase 5 bench device = ${BENCH_DEVICE})"
 log "  models         = ${MODELS[*]}"
 log "  phases         = ${PHASES[*]}"
-log "  train budget   = ${TRAIN_EPOCHS:-120 (default)} epochs, patience ${TRAIN_PATIENCE:-25 (default)}  [Phases 1, 2, 4]"
+log "  train budget   = ${TRAIN_EPOCHS:-120 (default)} epochs, patience ${TRAIN_PATIENCE:-120 (default)}  [Phases 1, 2, 4]"
 log "  cv             = k=${CV_K_FOLDS}, seed=${CV_SEED}"
-log "  hpo            = space=${HPO_SPACE}, trials=${HPO_ITERATIONS}, ep/trial=${HPO_EPOCHS_PER_TRIAL}, batch=${HPO_BATCH}, retries=${HPO_MAX_RETRIES} x ${HPO_RETRY_WAIT}s"
+log "  hpo            = space=${HPO_SPACE}, trials=${HPO_ITERATIONS}, ep/trial=${HPO_EPOCHS_PER_TRIAL}, batch=${HPO_BATCH:-per-model (16; xlarge 8)}, retries=${HPO_MAX_RETRIES} x ${HPO_RETRY_WAIT}s"
 log "  precisions     = ${EVAL_PRECISIONS}  [Phase 5 efficiency]"
 log "  force          = ${FORCE_FLAG:-<off>}"
 log "  yolo_seg_dir   = ${YOLO_SEG_DIR}"
 log "  pipeline_log   = ${PIPELINE_LOG}"
 if [[ -n "${TRAIN_EPOCHS}${TRAIN_PATIENCE}" ]]; then
-    log "  [aviso] orçamento de treino diferente do protocolo (120/25) — use apenas para smoke tests."
+    log "  [aviso] orçamento de treino diferente do protocolo (120/120) — use apenas para smoke tests."
 fi
 log "--------------------------------------------------------------"
 
@@ -367,7 +369,7 @@ if has_phase 3; then
                 --iterations "${HPO_ITERATIONS}" \
                 --epochs "${HPO_EPOCHS_PER_TRIAL}" \
                 --patience "${HPO_PATIENCE}" \
-                --batch "${HPO_BATCH}" \
+                ${HPO_BATCH:+--batch "${HPO_BATCH}"} \
                 "${HPO_FORCE_ARGS[@]}" || rc=$?
         fi
         HPO_FORCE_ARGS=()

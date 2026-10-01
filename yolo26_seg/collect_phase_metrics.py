@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 from common import DEFAULT_ORDER, DEFAULT_PIPELINE_ROOT, PipelinePaths, atomic_write_json, read_json
-from training import RUN_STATE_FILE, parse_best_metrics
+from training import RUN_STATE_FILE, effective_batch, parse_best_metrics
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,7 +71,13 @@ def collect_row(paths: PipelinePaths, phase: str, model: str) -> dict | None:
         f"  {model:<8} : mAP50(M)={metrics['map50_m']:.4f} mAP50-95(M)={metrics['map5095_m']:.4f} "
         f"P(M)={metrics['precision_m']:.4f} R(M)={metrics['recall_m']:.4f} F1(M)={metrics['f1_m']:.4f}",
     )
-    return {"model": model, "split": "val", "resumed": resumed, "run_dir": str(rd), **metrics}
+    batch = effective_batch(rd / "weights" / "best.pt")
+    requested = state.get("protocol", {}).get("batch")
+    if batch is not None and requested is not None and batch != requested:
+        print(f"  [warn] {model}: trained with batch={batch} (protocol batch={requested}; "
+              f"Ultralytics out-of-memory fallback)")
+    return {"model": model, "split": "val", "resumed": resumed, "run_dir": str(rd),
+            "batch_requested": requested, "batch_effective": batch, **metrics}
 
 
 def main() -> int:

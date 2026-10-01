@@ -7,7 +7,7 @@ augmentation), via :func:`common.baseline_protocol`. Baseline and Optimised
 (Phase 4) share the identical base setup and differ only in the tuned
 hyperparameters. The base setup deviates from the Ultralytics defaults in:
 
-* ``epochs=120`` and ``patience=25`` (defaults: 100 / 100);
+* ``epochs=120`` and ``patience=120`` — no early stopping (defaults: 100 / 100);
 * ``amp=False`` (default: True) — FP16 overflowed (NaN cls-loss) on xlarge;
 * ``optimizer="MuSGD"`` and ``cos_lr=True`` (defaults: ``"auto"`` and False;
   ``"auto"`` would pick AdamW or MuSGD from the iteration count and ignore

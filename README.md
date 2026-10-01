@@ -32,7 +32,7 @@ so the Baseline's own values are not candidates of the search. Deviations of the
 
 | Setting | Value | Ultralytics default | Why |
 |---|---|---|---|
-| `epochs` / `patience` | 120 / 25 | 100 / 100 | Same budget for every training phase (HPO trials: 30 / 10). |
+| `epochs` / `patience` | 120 / 120 (no early stopping) | 100 / 100 | Same budget for every training phase (HPO trials: 30 / 30). Every run completes its cosine LR schedule and `close_mosaic`; with patience 25 the noisy 100-image validation split stopped all Phase 1 runs at epochs 50–82 at a still-high LR. |
 | `amp` | `False` (FP32) | `True` | The xlarge variant overflowed in FP16 (NaN in the cls-loss); FP32 everywhere keeps numerical conditions uniform across sizes. |
 | `optimizer` | `MuSGD` | `auto` | `auto` picks AdamW or MuSGD from the number of iterations and then ignores `lr0`/`momentum`; an explicit optimiser makes both the default and the tuned `lr0`/`momentum` effective. |
 | `cos_lr` | `True` | `False` | One learning-rate schedule for every phase. |
@@ -192,7 +192,7 @@ If the run is interrupted (crash, driver failure, reboot), **run the same comman
 ```bash
 --phases "3 4 5"                 # a subset of phases
 --models "n s"                   # a subset of sizes (n,s,m,l,x or full names)
---models x --phases 3 --hpo-batch 16   # xlarge HPO in FP32 on 32 GB GPUs (see below)
+--models s --phases 3 --hpo-batch 32   # override the per-model HPO micro-batch (see below)
 --dry-run                        # print the commands only
 --epochs 3 --patience 2          # SMOKE TEST ONLY (applied to Phases 1, 2 and 4 together)
 --pipeline-name pipeline_final_v2      # a fresh, isolated study
@@ -200,7 +200,7 @@ If the run is interrupted (crash, driver failure, reboot), **run the same comman
 ```
 
 Environment overrides (defaults): `CV_K_FOLDS=5`, `CV_SEED=0`, `HPO_SPACE=refined`, `HPO_ITERATIONS=30`,
-`HPO_EPOCHS_PER_TRIAL=30`, `HPO_PATIENCE=10`, `HPO_BATCH=32`, `HPO_MAX_RETRIES=5`, `HPO_RETRY_WAIT=600`,
+`HPO_EPOCHS_PER_TRIAL=30`, `HPO_PATIENCE=30`, `HPO_BATCH=` (empty = per model: 16, xlarge 8), `HPO_MAX_RETRIES=5`, `HPO_RETRY_WAIT=600`,
 `EVAL_PRECISIONS="fp32 fp16"`, `BENCH_DEVICE`, `DATA_YAML`, `LOGS_ROOT`, `PROJECT`.
 
 Exit codes of `run_pipeline.sh`: `0` success · `75` the HPO gave up after repeated GPU failures (fix the driver and
@@ -235,14 +235,18 @@ re-run to resume) · any other value is the exit code of the failing step (its l
 
 * **AMP** is disabled in every phase (see the table above). Trade-off: ~30–40 % more GPU time and roughly twice the
   activation memory compared with AMP.
-* **HPO batch.** Phases 1, 2 and 4 use `batch=16`; Phase 3 trials use `batch=32` by default to speed up the search.
-  With `nbs=64` held constant, Ultralytics accumulates gradients (`accumulate = round(nbs / batch)`), so the
-  **effective optimisation batch is 64 in every phase and for every size**. For **xlarge** in FP32 + DDP, `batch=32`
-  does not fit in a 32 GB V100S, so use `--hpo-batch 16` (accumulation 4, still 64 effective).
+* **Micro-batch.** The protocol batch is 16. In FP32 at 640 px on a 32 GB V100S the peak training memory at batch 16
+  is nano 5.4, small 10.7, medium 21.6 and large 24.7 GB; **xlarge does not fit** (~40 GB) and Ultralytics silently
+  halves its batch to 8 after the out-of-memory error in the first epoch. Each run therefore records the batch it
+  really used (`batch_effective`, read from `best.pt`; a mismatch is a warning in the summary and the final report),
+  and Phase 3 trials use the same per-model micro-batch (`common.MICRO_BATCH`: 16, xlarge 8) instead of a batch that
+  would silently be halved. With `nbs=64` held constant, Ultralytics accumulates gradients
+  (`accumulate = round(nbs / batch)`), so the **effective optimisation batch is 64 in every phase and for every
+  size**; only the BatchNorm batch statistics differ for xlarge.
 
   Suggested wording: *"The nominal batch size (nbs = 64) is held constant across all phases and model sizes, so the
-  effective optimisation batch size is identical (64) throughout the study; only the micro-batch (16 or 32) and the
-  per-step memory footprint differ."*
+  effective optimisation batch size is identical (64) throughout the study; the micro-batch is 16, except for the
+  largest variant (8), which does not fit at 16 in FP32 on a 32 GB GPU."*
 
 ---
 

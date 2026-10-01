@@ -22,7 +22,9 @@ contract as Phase 3:
 ``model``, ``protocol`` / ``protocol_hash``, ``events`` (start / resume /
 complete), ``metrics`` (validation metrics of the epoch that produced
 ``best.pt``, see :func:`parse_best_metrics`),
-``epochs_trained``, ``best_pt``, ``ultralytics_version`` and ``torch_version``.
+``epochs_trained``, ``batch_effective`` (the micro-batch the run really used,
+see :func:`effective_batch`), ``best_pt``, ``ultralytics_version`` and
+``torch_version``.
 """
 
 from __future__ import annotations
@@ -102,6 +104,22 @@ def _best_pt_metrics(best_pt: Path) -> dict[str, float] | None:
     return mine
 
 
+def effective_batch(weights_pt: Path) -> int | None:
+    """Micro-batch a run really trained with (``train_args.batch`` of its checkpoint).
+
+    Ultralytics halves the batch after a CUDA out-of-memory error in the first
+    epoch and retries (up to 3 times) with only a log warning; ``args.yaml`` is
+    written before that and keeps the requested value, the checkpoint's
+    ``train_args`` hold the value actually used.
+    """
+    from ultralytics.utils.patches import torch_load
+
+    if not Path(weights_pt).exists():
+        return None
+    batch = (torch_load(weights_pt, map_location="cpu").get("train_args") or {}).get("batch")
+    return int(batch) if batch is not None else None
+
+
 def parse_best_metrics(results_csv: Path, best_pt: Path | None = None) -> dict[str, Any]:
     """Return the validation metrics of the epoch that produced ``best.pt``.
 
@@ -166,8 +184,14 @@ def parse_best_metrics(results_csv: Path, best_pt: Path | None = None) -> dict[s
         p, r = out[f"precision_{s}"], out[f"recall_{s}"]
         out[f"f1_{s}"] = (2 * p * r / (p + r)) if (p + r) > 0 else 0.0
     out["fitness"] = ultralytics_fitness(per_epoch[idx])
+    epochs = [int(float(r.get("epoch") or 0)) for r in rows]
+    if epochs != list(range(1, epochs[-1] + 1)):
+        missing = sorted(set(range(1, epochs[-1] + 1)) - set(epochs))
+        print(f"  [warn] {results_csv}: epochs missing from the training history "
+              f"({len(missing)}: {missing[:5]}{'...' if len(missing) > 5 else ''}) — "
+              f"was the run folder moved or edited during training?")
     out["best_epoch"] = float(rows[idx].get("epoch") or 0.0)
-    out["epochs_trained"] = float(len(rows))
+    out["epochs_trained"] = float(epochs[-1])   # last epoch, robust to missing rows
     out["best_epoch_source"] = source
     return out
 
@@ -295,6 +319,7 @@ def _train_or_resume_locked(
     if state is not None and state.get("status") == "complete":
         # Re-parsed (not read from run_state) so the best-epoch rule in force is applied.
         metrics = parse_best_metrics(run_dir / "results.csv", run_dir / "weights" / "best.pt")
+        _check_batch(run_dir, train_kwargs)
         return {
             "model": model, "skipped": True, "resumed": False, "elapsed_min": 0.0,
             "reason": f"complete ({state_path})", "metrics": metrics,
@@ -332,15 +357,30 @@ def _train_or_resume_locked(
     if not (last_pt.exists() and checkpoint_is_final(last_pt)):
         raise RuntimeError(f"training of {run_dir} ended without a final checkpoint")
     metrics = parse_best_metrics(run_dir / "results.csv", run_dir / "weights" / "best.pt")
+    batch = _check_batch(run_dir, train_kwargs)
+    if batch is not None and batch != train_kwargs["batch"]:
+        state["events"].append({"at": utc_now_iso(), "event": "batch_reduced",
+                                "requested": train_kwargs["batch"], "used": batch})
     state.update(
         status="complete", metrics=metrics, epochs_trained=int(metrics["epochs_trained"]),
-        best_pt=str(run_dir / "weights" / "best.pt"),
+        batch_effective=batch, best_pt=str(run_dir / "weights" / "best.pt"),
     )
     log("complete", elapsed_min=round((time.perf_counter() - t0) / 60, 2))
     return {
         "model": model, "skipped": False, "resumed": resumed, "reason": None,
         "elapsed_min": (time.perf_counter() - t0) / 60, "metrics": metrics,
     }
+
+
+def _check_batch(run_dir: Path, train_kwargs: dict[str, Any]) -> int | None:
+    """Micro-batch really used by a finished run; warn when it differs from the protocol."""
+    batch = effective_batch(run_dir / "weights" / "best.pt")
+    if batch is not None and batch != train_kwargs["batch"]:
+        print(f"  [warn] {run_dir.name}: trained with batch={batch}, not the protocol's "
+              f"batch={train_kwargs['batch']} (Ultralytics' out-of-memory fallback). "
+              f"nbs={train_kwargs.get('nbs')} keeps the effective batch; BatchNorm batch "
+              f"statistics differ — report it.")
+    return batch
 
 
 def print_phase_summary(title: str, summary: list[dict], total_min: float) -> None:
