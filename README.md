@@ -18,7 +18,7 @@ https://www.ultralytics.com/blog/how-to-custom-train-ultralytics-yolo26-for-inst
 | **2 — Baseline cross-validation** | Deterministic 5-fold CV with the Phase 1 configuration; DSC/JSI of each fold on its held-out fold | train ∪ val pool (**test excluded and verified**) | `train_all_models_cv.py`, `consolidate_cv_results.py`, `evaluate_cv_pixels.py` |
 | **3 — HPO** | Ultralytics genetic tuner with a **seeded** mutation RNG; **fault-tolerant and resumable** | train / val | `tune_all_models_v2.py`, `check_hpo_validity.py` |
 | **4 — Optimised fine-tuning** | Same fixed base setup + Phase 3 **tuned** hyperparameters | train / val | `train_all_models.py` |
-| **5 — Test set** | Baseline **and** Optimised on the unseen test set: instance metrics (mAP/P/R/F1), pixel metrics (DSC, JSI, ISIC thresholded JSI), batch-1 efficiency in **FP32 and FP16**, final report | **test** (only here) | `evaluate_test_set.py`, `benchmark_efficiency.py`, `build_final_report.py` |
+| **5 — Test set** | Baseline **and** Optimised on the unseen test set: instance metrics (mAP/P/R/F1), pixel metrics (DSC, JSI, ISIC thresholded JSI) and boundary metrics (Boundary IoU, NSD, HD95) with bootstrap 95 % CI, batch-1 efficiency (median/P95 latency, FPS, peak VRAM) in **FP32 and FP16**, final report | **test** (only here) | `evaluate_test_set.py`, `benchmark_efficiency.py`, `build_final_report.py` |
 
 Everything is orchestrated by **`run_pipeline.sh`**; all shared settings live in **`yolo26_seg/common.py`**.
 
@@ -235,18 +235,29 @@ re-run to resume) · any other value is the exit code of the failing step (its l
 **Accuracy (`evaluate_test_set.py`)** — run once per variant × size × precision on the `test` split only:
 
 * Instance metrics from `model.val(split="test", batch=1)` (P, R, mAP50, mAP50-95, F1; Box and Mask).
-* Pixel metrics per image: ground truth = union of the YOLO label polygons rasterised at full resolution;
+* Pixel metrics per image: ground truth = the official ISIC mask (`masks/<id>.png`, Phase 0) at dataset resolution;
   prediction = union of instance masks with `conf ≥ 0.25` at full resolution (`retina_masks=True`).
   `DSC = 2TP/(2TP+FP+FN)`, `JSI = TP/(TP+FP+FN)`, ISIC thresholded JSI (`JSI < 0.65 → 0`), sensitivity,
   specificity, accuracy. **An empty prediction scores 0** (never skipped); empty GT and empty prediction scores 1.
+* Boundary metrics (Metrics Reloaded): Boundary IoU (band 2 % of the image diagonal), NSD (tolerance 1 %) and
+  HD95 (95th-percentile symmetric Hausdorff distance in px; a missed lesion scores the image diagonal).
+* Aggregates: per-image mean, SD, median, IQR and a seeded bootstrap 95 % CI; per-image CSVs keyed by ISIC ID allow
+  paired tests (Baseline vs. Optimised in `hpo_gain.csv`; across architectures in the root notebook).
 * FP32 is the primary result (training was FP32); FP16 quantifies the accuracy cost of half precision.
 
 **Efficiency (`benchmark_efficiency.py`)** — `batch = 1`, one GPU, every configuration in a fresh process:
 
 * **Forward latency**: fused network on a fixed 1×3×640×640 input, timed with `torch.cuda.Event` + synchronise
-  per iteration (50 warm-up + 500 timed). **End-to-end latency**: `YOLO.predict()` on a real test image
-  (pre-processing, inference, mask post-processing), timed with `perf_counter` (20 + 200).
+  per iteration (50 warm-up + 500 timed). **End-to-end latency**: the deployed pipeline on a real test image —
+  `YOLO.predict()` with the Phase 5a settings (`conf` 0.25, `retina_masks=True`) and the union mask copied to the
+  host, i.e. exactly the mask that is scored (as for the U-Net and SAM 3) — timed with `perf_counter` (20 + 200).
 * Reported: mean, SD, median, **P90/P95/P99**, min/max, **FPS** = 1000 / mean (and 1000 / median).
+* **Driver-level VRAM**: `vram_process_peak_mb` = device memory held by the benchmark process at the end of the
+  forward / end-to-end loops (CUDA context, kernels and allocator cache included; `nvidia-smi` delta) and
+  `vram_cuda_context_mb` — the memory a deployment GPU must provide, next to the allocator peak (the model).
+* **`end_to_end_dataset`**: the end-to-end pipeline once on each of the first 100 test images sorted by ISIC ID
+  (the same images in the three repositories; `--e2e-images`), after one untimed pass — median/P95 over real,
+  varying inputs. The real-time criterion in the notebooks uses its P95.
 * **VRAM**: steady-state peak allocated/reserved by PyTorch after warm-up (the warm-up peak, which includes
   cuDNN autotuning workspaces, is stored separately; the CUDA context is excluded), and VRAM of the weights alone.
   **RAM**: RSS after loading/benchmarking and peak RSS.
@@ -279,7 +290,8 @@ re-run to resume) · any other value is the exit code of the failing step (its l
 | Notebook | Content |
 |---|---|
 | `notebooks/01_Segmentation_Visualizer.ipynb` | Test images with ground truth (green, solid border) and prediction (red, dashed border) for Baseline vs. Optimised; random sample, largest HPO gains/regressions, hardest cases. |
-| `notebooks/02_Metrics_and_Efficiency_Analysis.ipynb` | DSC/JSI across phases, paired HPO gain with *p*-values, accuracy vs. size/GFLOPs, latency vs. FPS, latency distribution (median/P95), VRAM/RAM, accuracy–latency trade-off, LaTeX tables. |
+| `notebooks/02_Metrics_and_Efficiency_Analysis.ipynb` | DSC/JSI across phases, paired HPO gain with *p*-values, accuracy vs. size/GFLOPs, latency vs. FPS, latency distribution (median/P95), VRAM/RAM, accuracy–latency trade-off, LaTeX tables; standard figures A–C (identical in the three repositories): accuracy vs. latency/FPS/parameters, training and inference time with the real-time criterion, boundary metrics. |
+| `article/Article_Figures_and_Tables.ipynb` + `article/article_aggregator.py` | Cross-architecture tables (LaTeX), paired tests (Wilcoxon, Holm, Friedman) and figures over YOLO26, U-Net and SAM 3 — byte-identical copies in the three repositories; place them in the folder holding the three repositories (see `article/README.md`). |
 
 They read only the files written by the pipeline (no GPU needed). The pipeline folder is found automatically
 (`$PIPELINE_DIR`, else `/workspace/logs/<name>`, else `logs/<name>`); figures go to `<pipeline>/figures/`
