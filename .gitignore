@@ -222,3 +222,6 @@ datasets/isic_2018_task1_yolo26
 datasets/isic_2018_task1_yolo26_2
 datasets/isic_2018_task1_yolo26_lab
 datasets/isic_2018_task1_yolo26_hed
+
+#My files
+METHODOLOGY_NOTES_FOR_ARTICLE.md
