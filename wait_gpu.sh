@@ -20,6 +20,8 @@
 
 GPU_DEVICE="${GPU_DEVICE:-0}"
 PIPELINE_NAME="${PIPELINE_NAME:-pipeline_final_v1}"
+# Raw official ISIC 2018 Task 1 release (Phase 0 input, mounted read-only).
+RAW_DATASET="${RAW_DATASET:-$(pwd)/../datasets/ISIC2018_Task1_Raw}"
 CHECK_INTERVAL=60
 REQUIRED_IDLE_MINUTES=3
 IDLE_COUNT=0
@@ -54,6 +56,7 @@ docker run --gpus "\"device=${GPU_DEVICE}\"" --rm --ipc=host \
   -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   -e GPU_DEVICE_IDS=0 -e PIPELINE_NAME="${PIPELINE_NAME}" \
   -v "$(pwd)/datasets:/workspace/datasets" \
+  -v "${RAW_DATASET}:/workspace/raw:ro" \
   -v "$(pwd)/logs:/workspace/logs" \
   -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
   -v "$(pwd)/utils:/workspace/utils" \

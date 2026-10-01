@@ -13,6 +13,7 @@ https://www.ultralytics.com/blog/how-to-custom-train-ultralytics-yolo26-for-inst
 
 | Phase | What | Data | Script(s) |
 |---|---|---|---|
+| **0 — Dataset** | YOLO-seg dataset built from the **raw official ISIC 2018 Task 1 release** (`../datasets/ISIC2018_Task1_Raw`): exactly **2,594 / 100 / 1,000** images (asserted); long side ≤ 1,024 px (aspect preserved); official masks kept in `masks/` as the evaluation ground truth; YOLO polygons (holes bridged) for training, fidelity-checked | raw release | `prepare_dataset.py` |
 | **1 — Baseline training** | Fixed base setup + Ultralytics **default** hyperparameters | train / val | `train_baseline_models.py` |
 | **2 — Baseline cross-validation** | Deterministic 5-fold CV with the Phase 1 configuration; DSC/JSI of each fold on its held-out fold | train ∪ val pool (**test excluded and verified**) | `train_all_models_cv.py`, `consolidate_cv_results.py`, `evaluate_cv_pixels.py` |
 | **3 — HPO** | Ultralytics genetic tuner with a **seeded** mutation RNG; **fault-tolerant and resumable** | train / val | `tune_all_models_v2.py`, `check_hpo_validity.py` |
@@ -84,10 +85,11 @@ Every step is idempotent and resumable — **re-running the same command continu
 ## Requirements
 
 * Docker with NVIDIA GPU support (NVIDIA Container Toolkit)
-* Dataset in YOLO segmentation format with `train`, `val` **and** `test` splits:
+* The raw official ISIC 2018 Task 1 release in `../datasets/ISIC2018_Task1_Raw` (training/validation/test inputs and
+  ground truths); Phase 0 converts it to the YOLO segmentation dataset (`train`, `val` **and** `test` splits):
 
 ```
-./datasets/isic_2018_task1_yolo26/data.yaml
+./datasets/isic2018_task1_official/data.yaml   # built by Phase 0 from ../datasets/ISIC2018_Task1_Raw
 ```
 
 ## Project structure
@@ -171,6 +173,7 @@ docker run --gpus all -it --rm \
     -e GPU_DEVICE_IDS="${GPU_DEVICE_IDS}" \
     -e PIPELINE_NAME="${PIPELINE_NAME}" \
     -v "$(pwd)/datasets:/workspace/datasets" \
+    -v "$(pwd)/../datasets/ISIC2018_Task1_Raw:/workspace/raw:ro" \
     -v "$(pwd)/logs:/workspace/logs" \
     -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
     -v "$(pwd)/utils:/workspace/utils" \
@@ -269,6 +272,7 @@ docker run --gpus all -it --rm -p 8888:8888 \
     --user "$(id -u):$(id -g)" \
     -e HOME=/workspace/cache \
     -v "$(pwd)/datasets:/workspace/datasets" \
+    -v "$(pwd)/../datasets/ISIC2018_Task1_Raw:/workspace/raw:ro" \
     -v "$(pwd)/logs:/workspace/logs" \
     -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
     -v "$(pwd)/notebooks:/workspace/notebooks" \

@@ -86,7 +86,7 @@ WEIGHTS: dict[str, str] = {
 }
 
 #: Default dataset YAML (must declare ``train``, ``val`` and ``test`` splits).
-DEFAULT_DATA_YAML: str = "/workspace/datasets/isic_2018_task1_yolo26/data.yaml"
+DEFAULT_DATA_YAML: str = "/workspace/datasets/isic2018_task1_official/data.yaml"
 
 #: Default pipeline root; isolates this study from older runs under ``logs/``.
 DEFAULT_PIPELINE_ROOT: str = "/workspace/logs/pipeline_final_v1"

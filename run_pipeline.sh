@@ -3,6 +3,9 @@
 # run_pipeline.sh — Master orchestrator for the YOLO26-seg study on the
 # ISIC 2018 Task 1 dataset (5-phase protocol).
 #
+#   Phase 0 — Dataset               (YOLO-seg dataset built from the RAW official
+#                                    ISIC 2018 Task 1 release: 2,594 / 100 /
+#                                    1,000 images, asserted; idempotent)
 #   Phase 1 — Baseline training     (base setup + Ultralytics default HPs;
 #                                    train/val split)
 #   Phase 2 — Baseline 5-fold CV    (Phase 1 protocol; train+val pool; the test
@@ -33,7 +36,9 @@
 set -euo pipefail
 
 # ---------- Defaults ---------------------------------------------------------
-DATA_YAML="${DATA_YAML:-/workspace/datasets/isic_2018_task1_yolo26/data.yaml}"
+DATA_YAML="${DATA_YAML:-/workspace/datasets/isic2018_task1_official/data.yaml}"
+# Raw official ISIC 2018 Task 1 release (Phase 0 input; mount it read-only here).
+RAW_DIR="${RAW_DIR:-/workspace/raw}"
 # Every artefact of this study lives under LOGS_ROOT/PIPELINE_NAME, isolated
 # from older runs already present in LOGS_ROOT.
 LOGS_ROOT="${LOGS_ROOT:-/workspace/logs}"
@@ -52,7 +57,7 @@ GPU_DEVICE_IDS="${GPU_DEVICE_IDS:-0,1}"
 BENCH_DEVICE="${BENCH_DEVICE:-}"
 MODELS_DEFAULT=(nano small medium large xlarge)
 MODELS=("${MODELS_DEFAULT[@]}")
-PHASES=(1 2 3 4 5)
+PHASES=(0 1 2 3 4 5)
 
 # Training budget of Phases 1, 2 and 4 (empty = defaults in common.py:
 # 120 epochs / patience 120). Override ONLY for smoke tests — the same values
@@ -99,7 +104,7 @@ usage() {
 Usage: $0 [options]
 
 Options:
-  --phases "1 2 3 4 5"        Subset of phases to run (default: all five).
+  --phases "0 1 2 3 4 5"      Subset of phases to run (default: all; 0 is skipped when up to date).
   --models "n s m l x"        Subset of model sizes. Accepts
                               {nano,small,medium,large,xlarge} or {n,s,m,l,x}.
   --data PATH                 data.yaml with train/val/test. (env: DATA_YAML)
@@ -179,8 +184,8 @@ done
 MODELS=("${NORM_MODELS[@]}")
 
 for p in "${PHASES[@]}"; do
-    if [[ ! "${p}" =~ ^[1-5]$ ]]; then
-        echo "[erro] Fase inválida: '${p}'. Use números de 1 a 5." >&2
+    if [[ ! "${p}" =~ ^[0-5]$ ]]; then
+        echo "[erro] Fase inválida: '${p}'. Use números de 0 a 5." >&2
         exit 2
     fi
 done
@@ -307,6 +312,14 @@ if [[ -n "${TRAIN_EPOCHS}${TRAIN_PATIENCE}" ]]; then
     log "  [aviso] orçamento de treino diferente do protocolo (120/120) — use apenas para smoke tests."
 fi
 log "--------------------------------------------------------------"
+
+# ---------- Phase 0 — Dataset from the raw official release -----------------
+if has_phase 0; then
+    log ""
+    log "### Phase 0 — YOLO-seg dataset from the raw ISIC 2018 Task 1 release (${RAW_DIR}; idempotent)"
+    run_or_die phase0 python "${YOLO_SEG_DIR}/prepare_dataset.py" \
+        --raw "${RAW_DIR}" --out "$(dirname "${DATA_YAML}")" "${FORCE_ARGS[@]}"
+fi
 
 # ---------- Phase 1 — Baseline training -------------------------------------
 if has_phase 1; then
