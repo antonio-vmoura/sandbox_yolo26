@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the outputs of Phase 2 (HPO) after ``tune_all_models_v2.py`` runs.
+"""Validate the outputs of Phase 3 (HPO) after ``tune_all_models_v2.py`` runs.
 
 Motivation
 ----------
@@ -7,7 +7,7 @@ The Ultralytics ``Tuner`` **does not propagate per-trial failures**: when a
 trial dies (for example after the NVIDIA driver crashes on the host) the
 Tuner simply records ``fitness=0`` for that trial and moves on. At the end
 of the run it writes a ``best_hyperparameters.yaml`` that is just the initial
-seed vector and returns exit-code 0 — making the entire Phase 2 *look*
+seed vector and returns exit-code 0 — making the entire Phase 3 *look*
 successful when in fact **no trial actually finished**.
 
 This script walks each model's ``tune_results.csv`` and treats the HPO as
@@ -15,24 +15,27 @@ degenerate if:
 
 * the CSV is missing,
 * it has fewer than ``--min-rows`` rows, **or**
-* it has fewer than ``--min-trials`` rows with ``fitness > 0``.
+* it has fewer than ``--min-trials`` rows with ``fitness > 0``,
+* ``--iterations`` is given and fewer trials than that were recorded, **or**
+* ``hpo_state.json`` (the Phase 3 checkpoint) is missing or not ``complete``.
 
 When any model is degenerate the script returns exit-code 1, listing what
 needs to be re-tuned.
 
 Usage:
-    Typical invocation (called by ``run_pipeline.sh`` right after Phase 2)::
+    Typical invocation (called by ``run_pipeline.sh`` right after Phase 3)::
 
         python yolo26_seg/check_hpo_validity.py \\
-            --project /workspace/logs/pipeline_e2e_v2 \\
+            --project /workspace/logs/pipeline_final_v1 \\
             --models nano small medium large xlarge \\
-            --min-trials 1
+            --iterations 30 --min-trials 1
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
 from pathlib import Path
 
@@ -49,22 +52,19 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--project", required=True,
-        help="Pipeline root directory (e.g. /workspace/logs/pipeline_e2e_v2).",
+        help="Pipeline root directory (e.g. /workspace/logs/pipeline_final_v1).",
     )
     p.add_argument(
         "--models", nargs="+", required=True,
-        help="Models tuned in this Phase 2 (e.g. nano small medium large xlarge).",
+        help="Models tuned in Phase 3 (e.g. nano small medium large xlarge).",
     )
     p.add_argument(
-        "--hpo-dir", default="hpo/hpo_v3",
-        help="HPO subdirectory relative to --project (default: hpo/hpo_v3).",
+        "--hpo-dir", default="phase3_hpo",
+        help="HPO subdirectory relative to --project (default: phase3_hpo).",
     )
     p.add_argument(
-        "--tune-prefix", default="tune_isic_2018_task_1_",
-        help=(
-            "Prefix of every tune directory name (default: "
-            "tune_isic_2018_task_1_<model>)."
-        ),
+        "--tune-prefix", default="tune_",
+        help="Prefix of every tune directory name (default: tune_<model>).",
     )
     p.add_argument(
         "--min-trials", type=int, default=1,
@@ -82,7 +82,38 @@ def parse_args() -> argparse.Namespace:
             "empty CSV."
         ),
     )
+    p.add_argument(
+        "--iterations", type=int, default=None,
+        help=(
+            "Expected number of trials per model. When given, the HPO must be "
+            "complete: exactly this many rows and hpo_state.json with "
+            "status='complete'. Omit to validate legacy runs without a checkpoint."
+        ),
+    )
     return p.parse_args()
+
+
+def _check_completion(tune_dir: Path, total: int, iterations: int) -> str | None:
+    """Return an error message if the HPO did not reach ``iterations`` trials.
+
+    Args:
+        tune_dir: Per-model tune directory.
+        total: Number of rows in ``tune_results.csv``.
+        iterations: Expected number of trials.
+
+    Returns:
+        ``None`` when complete, otherwise a human-readable reason.
+    """
+    if total < iterations:
+        return f"INCOMPLETE — {total}/{iterations} trial(s) recorded (re-run Phase 3 to resume)"
+    state_path = tune_dir / "hpo_state.json"
+    if not state_path.exists():
+        return f"hpo_state.json missing at {state_path}"
+    with state_path.open() as f:
+        status = json.load(f).get("status")
+    if status != "complete":
+        return f"INCOMPLETE — hpo_state.json status={status!r} (re-run Phase 3 to resume)"
+    return None
 
 
 def _find_fitness_column(fieldnames: list[str]) -> str | None:
@@ -136,6 +167,7 @@ def validate_model(
     tune_prefix: str,
     min_trials: int,
     min_rows: int,
+    iterations: int | None = None,
 ) -> tuple[bool, str]:
     """Validate the HPO of a single model.
 
@@ -146,6 +178,7 @@ def validate_model(
         tune_prefix: Prefix of the per-model tune sub-directory.
         min_trials: Minimum number of trials with ``fitness > 0`` required.
         min_rows: Minimum number of rows expected in ``tune_results.csv``.
+        iterations: Expected number of trials (``None`` skips the check).
 
     Returns:
         ``(ok, message)`` where ``ok=False`` signals a degenerate run.
@@ -168,6 +201,11 @@ def validate_model(
     if fitness_key is None:
         return False, f"'fitness' column missing in {csv_path}"
 
+    if iterations is not None:
+        reason = _check_completion(tune_dir, total, iterations)
+        if reason:
+            return False, reason
+
     good, best = _count_valid_trials(rows, fitness_key)
     if good < min_trials:
         return False, (
@@ -185,7 +223,8 @@ def _print_header(project: Path, args: argparse.Namespace) -> None:
         f"\n  hpo_dir     = {project / args.hpo_dir}"
         f"\n  models      = {args.models}"
         f"\n  min_trials  = {args.min_trials}"
-        f"\n  min_rows    = {args.min_rows}\n"
+        f"\n  min_rows    = {args.min_rows}"
+        f"\n  iterations  = {args.iterations}\n"
     )
 
 
@@ -196,9 +235,9 @@ def _print_actionable_remediation(
 ) -> None:
     """Print a copy-paste remediation snippet pointing at the broken tune dirs."""
     print(
-        "\nDelete the affected model directories and re-run Phase 2.\n"
-        "Example:\n"
-        f"  rm -rf {project / hpo_dir}/{tune_prefix}<model>"
+        "\nIncomplete searches: re-run Phase 3 — it resumes from the last trial.\n"
+        "Degenerate searches: re-run Phase 3 with --force for the affected model(s)\n"
+        f"(the previous {project / hpo_dir}/{tune_prefix}<model> is kept as a .bak-<UTC> copy)."
     )
 
 
@@ -221,6 +260,7 @@ def main() -> int:
             tune_prefix=args.tune_prefix,
             min_trials=args.min_trials,
             min_rows=args.min_rows,
+            iterations=args.iterations,
         )
         status = "OK   " if ok else "FAIL "
         print(f"  [{status}] {model:7s}  {msg}")

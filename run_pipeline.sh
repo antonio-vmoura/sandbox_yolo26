@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run_pipeline.sh — Master orchestrator for the YOLO26-seg fine-tuning pipeline
-# on the ISIC 2018 Task 1 dataset.
+# run_pipeline.sh — Master orchestrator for the YOLO26-seg study on the
+# ISIC 2018 Task 1 dataset (5-phase protocol).
 #
-# Pipeline phases (executed sequentially and idempotently):
-#   Phase 1 — Baseline training (Ultralytics defaults, 120 ep, patience=20)
-#   Phase 2 — Hyperparameter Optimization via model.tune() (refined space)
-#   Phase 3 — Optimized fine-tuning (single-split) using HP yamls from Phase 2
-#   Phase 4 — 5-Fold Cross-Validation (deterministic, seed=0, NumPy-only KFold)
-#             + consolidation (mean/std) of mAP@50, mAP@50-95, P, R, F1 across
-#             models.
+#   Phase 1 — Baseline training     (base setup + Ultralytics default HPs;
+#                                    train/val split)
+#   Phase 2 — Baseline 5-fold CV    (Phase 1 protocol; train+val pool; the test
+#                                    set is excluded and verified isolated;
+#                                    DSC/JSI of each fold on its held-out fold)
+#   Phase 3 — HPO                   (seeded Ultralytics GA; resumable; retried
+#                                    automatically on exit code 75 = GPU down)
+#   Phase 4 — Optimised fine-tuning (Phase 3 HPs; train/val split)
+#   Phase 5 — Test set evaluation   (Baseline AND Optimised: accuracy, DSC/JSI,
+#                                    batch=1 efficiency in FP32 and FP16, final
+#                                    report in <project>/summary/)
 #
-# Idempotency: each underlying Python script already detects existing artefacts
-# (best.pt, best_hyperparameters.yaml, metrics_summary.json) and skips work.
-# Use --force to override at the per-phase level.
+# Every phase shares one base setup (MuSGD, cos_lr, nbs=64, close_mosaic=10,
+# amp=False, seed=0; epochs=120 / patience=25 for Phases 1, 2 and 4), defined
+# once in yolo26_seg/common.py, so the tuned hyperparameters are the only
+# variable between Baseline (default HPs) and Optimised (tuned HPs).
+#
+# Fault tolerance: every Python step is idempotent and resumable. Re-running
+# the same command continues where it stopped (interrupted trainings resume
+# from last.pt; the HPO resumes from its last completed trial). Use --force to
+# start a phase over (previous outputs are moved to *.bak-<UTC>, not deleted).
 #
 # All commands assume the script runs *inside* the ``yolo26_ft`` Docker
 # container with the standard volume mounts (datasets, logs, yolo26_seg,
@@ -23,12 +33,10 @@ set -euo pipefail
 
 # ---------- Defaults ---------------------------------------------------------
 DATA_YAML="${DATA_YAML:-/workspace/datasets/isic_2018_task1_yolo26/data.yaml}"
-# Isolate this pipeline's outputs under a dedicated sub-directory of LOGS_ROOT
-# so they don't get mixed with previous standalone runs (HPO, CV, FT) that
-# already live directly under /workspace/logs/. Override PIPELINE_NAME to start
-# a fresh run (e.g. pipeline_e2e_v2) without touching the previous artefacts.
+# Every artefact of this study lives under LOGS_ROOT/PIPELINE_NAME, isolated
+# from older runs already present in LOGS_ROOT.
 LOGS_ROOT="${LOGS_ROOT:-/workspace/logs}"
-PIPELINE_NAME="${PIPELINE_NAME:-pipeline_e2e_v1}"
+PIPELINE_NAME="${PIPELINE_NAME:-pipeline_final_v1}"
 # Detect whether PROJECT was pre-set via env var so we don't silently
 # clobber it during the LOGS_ROOT/PIPELINE_NAME recomposition below.
 if [[ -n "${PROJECT:-}" ]]; then
@@ -38,34 +46,45 @@ else
 fi
 PROJECT="${PROJECT:-${LOGS_ROOT}/${PIPELINE_NAME}}"
 GPU_DEVICE_IDS="${GPU_DEVICE_IDS:-0,1}"
+# Phase 5 runs on a single GPU (batch=1 latency). Default: first training GPU
+# (resolved after CLI parsing).
+BENCH_DEVICE="${BENCH_DEVICE:-}"
 MODELS_DEFAULT=(nano small medium large xlarge)
 MODELS=("${MODELS_DEFAULT[@]}")
-PHASES=(1 2 3 4)
+PHASES=(1 2 3 4 5)
 
-# Phase 1 (baseline)
-P1_EPOCHS="${P1_EPOCHS:-120}"
-P1_PATIENCE="${P1_PATIENCE:-20}"
+# Training budget of Phases 1, 2 and 4 (empty = defaults in common.py:
+# 120 epochs / patience 25). Override ONLY for smoke tests — the same values
+# are always passed to all three phases.
+TRAIN_EPOCHS="${TRAIN_EPOCHS:-}"
+TRAIN_PATIENCE="${TRAIN_PATIENCE:-}"
 
-# Phase 2 (HPO)
+# Phase 2 (CV)
+CV_K_FOLDS="${CV_K_FOLDS:-5}"
+CV_SEED="${CV_SEED:-0}"
+
+# Phase 3 (HPO)
 HPO_SPACE="${HPO_SPACE:-refined}"
 HPO_ITERATIONS="${HPO_ITERATIONS:-30}"
 HPO_EPOCHS_PER_TRIAL="${HPO_EPOCHS_PER_TRIAL:-30}"
 HPO_PATIENCE="${HPO_PATIENCE:-10}"
-# Micro-batch por trial. Default 32 (mantém o comportamento histórico dos
-# HPOs já executados para nano/small/medium/large). Use 16 para o xlarge em
-# FP32 (amp=False) em GPUs de 32 GB — com nbs=64 (gradient accumulation) o
-# batch efetivo do step de otimização continua sendo 64 para qualquer valor
-# escolhido aqui, preservando a comparabilidade entre modelos.
+# Micro-batch por trial. Default 32 (comportamento histórico). Use 16 para o
+# xlarge em FP32 em GPUs de 32 GB — com nbs=64 o batch efetivo do passo de
+# otimização continua 64 para qualquer valor, preservando a comparabilidade.
 HPO_BATCH="${HPO_BATCH:-32}"
+# Retry loop on exit code 75 (GPU/driver unavailable): number of retries after
+# the first attempt, and the wait (seconds) between attempts.
+HPO_MAX_RETRIES="${HPO_MAX_RETRIES:-5}"
+HPO_RETRY_WAIT="${HPO_RETRY_WAIT:-600}"
 
-# Phase 4 (CV)
-CV_K_FOLDS="${CV_K_FOLDS:-5}"
-CV_SEED="${CV_SEED:-0}"
-CV_EPOCHS="${CV_EPOCHS:-120}"
-CV_PATIENCE="${CV_PATIENCE:-25}"
+# Phase 5 (test set)
+EVAL_PRECISIONS="${EVAL_PRECISIONS:-fp32 fp16}"
 
 FORCE_FLAG=""
 DRY_RUN=0
+
+#: Exit code used by tune_all_models_v2.py for a transient GPU/driver failure.
+EXIT_GPU_UNAVAILABLE=75
 
 YOLO_SEG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/yolo26_seg"
 # When mounted in Docker, the canonical path is /workspace/yolo26_seg.
@@ -73,50 +92,46 @@ if [[ -d /workspace/yolo26_seg ]]; then
     YOLO_SEG_DIR=/workspace/yolo26_seg
 fi
 
-# Logs directory for the pipeline run itself (separate from per-model logs).
-RUN_TS="$(date -u +%Y%m%dT%H%M%SZ)"
-PIPELINE_LOG_DIR="${PROJECT}/pipeline_runs/${RUN_TS}"
-
 usage() {
     cat <<EOF
 Usage: $0 [options]
 
 Options:
-  --phases "1 2 3 4"          Subset of phases to run (default: 1 2 3 4).
-  --models "n s m l x"        Subset of model sizes to process.
-                              Accepts {nano,small,medium,large,xlarge} or
-                              {n,s,m,l,x}. Default: all five.
-  --data PATH                 Override data.yaml path. (env: DATA_YAML)
-  --logs-root PATH            Parent dir for all pipeline runs.
+  --phases "1 2 3 4 5"        Subset of phases to run (default: all five).
+  --models "n s m l x"        Subset of model sizes. Accepts
+                              {nano,small,medium,large,xlarge} or {n,s,m,l,x}.
+  --data PATH                 data.yaml with train/val/test. (env: DATA_YAML)
+  --logs-root PATH            Parent dir of all pipeline runs.
                               (env: LOGS_ROOT, default /workspace/logs)
-  --pipeline-name NAME        Sub-directory under LOGS_ROOT that isolates
-                              THIS run's artefacts from any previous training
-                              that lives directly under LOGS_ROOT.
-                              (env: PIPELINE_NAME, default pipeline_e2e_v1)
-  --project PATH              Explicit project root (overrides the
-                              LOGS_ROOT/PIPELINE_NAME composition).
+  --pipeline-name NAME        Sub-directory under LOGS_ROOT for THIS study.
+                              (env: PIPELINE_NAME, default pipeline_final_v1)
+  --project PATH              Explicit root (overrides LOGS_ROOT/PIPELINE_NAME).
                               (env: PROJECT)
-  --device "0,1"              GPU IDs passed to Ultralytics (DDP comma-sep).
-                              (env: GPU_DEVICE_IDS)
-  --hpo-batch INT             Micro-batch per trial for Phase 2 HPO
-                              (default: 32). Use 16 for xlarge in FP32 on
-                              32 GB GPUs — nbs=64 keeps the effective optim
-                              batch at 64. (env: HPO_BATCH)
-  --force                     Pass --force to each underlying script.
+  --device "0,1"              GPU IDs for training (DDP). (env: GPU_DEVICE_IDS)
+  --bench-device ID           Single GPU for Phase 5. (env: BENCH_DEVICE,
+                              default: first ID of --device)
+  --hpo-batch INT             Micro-batch per HPO trial (default 32; use 16 for
+                              xlarge in FP32 on 32 GB GPUs). (env: HPO_BATCH)
+  --epochs INT / --patience INT
+                              Smoke-test budget for Phases 1, 2 AND 4 together.
+                              (env: TRAIN_EPOCHS / TRAIN_PATIENCE)
+  --force                     Start the selected phases over (old outputs are
+                              moved to *.bak-<UTC>).
   --dry-run                   Print commands without executing them.
   -h, --help                  Show this help and exit.
 
 Environment variables (override defaults):
-  DATA_YAML, LOGS_ROOT, PIPELINE_NAME, PROJECT, GPU_DEVICE_IDS,
-  P1_EPOCHS, P1_PATIENCE,
+  DATA_YAML, LOGS_ROOT, PIPELINE_NAME, PROJECT, GPU_DEVICE_IDS, BENCH_DEVICE,
+  TRAIN_EPOCHS, TRAIN_PATIENCE, CV_K_FOLDS, CV_SEED,
   HPO_SPACE, HPO_ITERATIONS, HPO_EPOCHS_PER_TRIAL, HPO_PATIENCE, HPO_BATCH,
-  CV_K_FOLDS, CV_SEED, CV_EPOCHS, CV_PATIENCE
+  HPO_MAX_RETRIES, HPO_RETRY_WAIT, EVAL_PRECISIONS
+
+Exit codes: 0 success; 75 HPO gave up after HPO_MAX_RETRIES GPU failures;
+            anything else = exit code of the failing step.
 EOF
 }
 
 # ---------- CLI parsing ------------------------------------------------------
-# Track whether --project was passed explicitly (takes precedence over
-# LOGS_ROOT/PIPELINE_NAME composition).
 PROJECT_EXPLICIT=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -127,7 +142,10 @@ while [[ $# -gt 0 ]]; do
         --pipeline-name) PIPELINE_NAME="$2"; shift 2 ;;
         --project) PROJECT="$2"; PROJECT_EXPLICIT=1; shift 2 ;;
         --device) GPU_DEVICE_IDS="$2"; shift 2 ;;
+        --bench-device) BENCH_DEVICE="$2"; shift 2 ;;
         --hpo-batch) HPO_BATCH="$2"; shift 2 ;;
+        --epochs) TRAIN_EPOCHS="$2"; shift 2 ;;
+        --patience) TRAIN_PATIENCE="$2"; shift 2 ;;
         --force) FORCE_FLAG="--force"; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -140,6 +158,8 @@ done
 if [[ "${PROJECT_EXPLICIT}" -eq 0 && "${PROJECT_FORCED}" -eq 0 ]]; then
     PROJECT="${LOGS_ROOT}/${PIPELINE_NAME}"
 fi
+
+BENCH_DEVICE="${BENCH_DEVICE:-${GPU_DEVICE_IDS%%,*}}"
 
 # Normalize model short aliases (n,s,m,l,x) to canonical names.
 declare -A MODEL_ALIAS=(
@@ -156,6 +176,22 @@ for raw in "${MODELS[@]}"; do
 done
 MODELS=("${NORM_MODELS[@]}")
 
+for p in "${PHASES[@]}"; do
+    if [[ ! "${p}" =~ ^[1-5]$ ]]; then
+        echo "[erro] Fase inválida: '${p}'. Use números de 1 a 5." >&2
+        exit 2
+    fi
+done
+
+# Same budget flags for Phases 1, 2 and 4 (empty array = common.py defaults).
+BUDGET_ARGS=()
+[[ -n "${TRAIN_EPOCHS}" ]] && BUDGET_ARGS+=(--epochs "${TRAIN_EPOCHS}")
+[[ -n "${TRAIN_PATIENCE}" ]] && BUDGET_ARGS+=(--patience "${TRAIN_PATIENCE}")
+FORCE_ARGS=()
+[[ -n "${FORCE_FLAG}" ]] && FORCE_ARGS+=("${FORCE_FLAG}")
+
+RUN_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+PIPELINE_LOG_DIR="${PROJECT}/pipeline_runs/${RUN_TS}"
 mkdir -p "${PIPELINE_LOG_DIR}"
 PIPELINE_LOG="${PIPELINE_LOG_DIR}/pipeline.log"
 
@@ -163,11 +199,8 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" | tee -a "${PIPELINE_LOG
 
 # ---------- GPU sanity check -------------------------------------------------
 # Verifica, em <1 s, se o driver NVIDIA e o torch.cuda ainda estão saudáveis
-# antes de cada fase. Necessário porque uma queda do nvidia.ko (NVRM/NVML) no
-# host durante um run longo (observado no pipeline_e2e_v2 após ~21 h de FP32)
-# faz com que as fases subsequentes morram com erros crípticos
-# (``Can't initialize NVML`` + ``torch.cuda.is_available()=False``) e o
-# script atual gastaria minutos até falhar dentro do trainer. Falhar cedo,
+# antes de cada fase. Uma queda do nvidia.ko (NVRM/NVML) no host durante um
+# run longo faz as fases seguintes morrerem com erros crípticos; falhar cedo,
 # aqui, evita esse desperdício e dá uma mensagem acionável.
 #
 # Em modo --dry-run, a checagem é pulada (não há GPU envolvida).
@@ -204,22 +237,6 @@ PY
     return 0
 }
 
-log "=============================================================="
-log "YOLO26-seg ISIC 2018 Task 1 — End-to-End Pipeline"
-log "=============================================================="
-log "  data           = ${DATA_YAML}"
-log "  logs_root      = ${LOGS_ROOT}"
-log "  pipeline_name  = ${PIPELINE_NAME}"
-log "  project        = ${PROJECT}"
-log "  device         = ${GPU_DEVICE_IDS}"
-log "  models         = ${MODELS[*]}"
-log "  phases         = ${PHASES[*]}"
-log "  hpo_batch      = ${HPO_BATCH}  (nbs=64 keeps effective optim batch at 64)"
-log "  force          = ${FORCE_FLAG:-<off>}"
-log "  yolo_seg_dir   = ${YOLO_SEG_DIR}"
-log "  pipeline_log   = ${PIPELINE_LOG}"
-log "--------------------------------------------------------------"
-
 run_cmd() {
     local phase_tag="$1"; shift
     local phase_log="${PIPELINE_LOG_DIR}/${phase_tag}.log"
@@ -241,6 +258,16 @@ run_cmd() {
     return 0
 }
 
+# Run a step and abort the pipeline with its exit code if it fails.
+run_or_die() {
+    local rc=0
+    run_cmd "$@" || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        log "Pipeline aborted at step '$1' (exit ${rc}). Fix the cause and re-run the same command to resume."
+        exit "${rc}"
+    fi
+}
+
 has_phase() {
     local needle="$1"
     for p in "${PHASES[@]}"; do
@@ -249,95 +276,173 @@ has_phase() {
     return 1
 }
 
-# ---------- Phase 1 — Baseline ----------------------------------------------
+# Abort unless a Phase 1/4 training run has completed (run_state.json).
+require_complete_run() {
+    local run_dir="$1" label="$2"
+    [[ "${DRY_RUN}" -eq 1 ]] && return 0
+    if ! grep -q '"status": "complete"' "${run_dir}/run_state.json" 2>/dev/null; then
+        log "[erro] ${label}: run incompleto ou ausente em ${run_dir} — execute a fase correspondente antes."
+        exit 3
+    fi
+}
+
+log "=============================================================="
+log "YOLO26-seg ISIC 2018 Task 1 — 5-Phase Pipeline"
+log "=============================================================="
+log "  data           = ${DATA_YAML}"
+log "  project        = ${PROJECT}"
+log "  device         = ${GPU_DEVICE_IDS}   (Phase 5 bench device = ${BENCH_DEVICE})"
+log "  models         = ${MODELS[*]}"
+log "  phases         = ${PHASES[*]}"
+log "  train budget   = ${TRAIN_EPOCHS:-120 (default)} epochs, patience ${TRAIN_PATIENCE:-25 (default)}  [Phases 1, 2, 4]"
+log "  cv             = k=${CV_K_FOLDS}, seed=${CV_SEED}"
+log "  hpo            = space=${HPO_SPACE}, trials=${HPO_ITERATIONS}, ep/trial=${HPO_EPOCHS_PER_TRIAL}, batch=${HPO_BATCH}, retries=${HPO_MAX_RETRIES} x ${HPO_RETRY_WAIT}s"
+log "  precisions     = ${EVAL_PRECISIONS}  [Phase 5 efficiency]"
+log "  force          = ${FORCE_FLAG:-<off>}"
+log "  yolo_seg_dir   = ${YOLO_SEG_DIR}"
+log "  pipeline_log   = ${PIPELINE_LOG}"
+if [[ -n "${TRAIN_EPOCHS}${TRAIN_PATIENCE}" ]]; then
+    log "  [aviso] orçamento de treino diferente do protocolo (120/25) — use apenas para smoke tests."
+fi
+log "--------------------------------------------------------------"
+
+# ---------- Phase 1 — Baseline training -------------------------------------
 if has_phase 1; then
     log ""
-    log "### Phase 1 — Baseline training (Ultralytics defaults, ${P1_EPOCHS} ep, patience=${P1_PATIENCE})"
+    log "### Phase 1 — Baseline training (base setup + Ultralytics default HPs)"
     gpu_sanity_check phase1 || exit $?
-    run_cmd phase1 python "${YOLO_SEG_DIR}/train_baseline_models.py" \
+    run_or_die phase1 python "${YOLO_SEG_DIR}/train_baseline_models.py" \
         --models "${MODELS[@]}" \
         --data "${DATA_YAML}" \
         --device "${GPU_DEVICE_IDS}" \
         --project "${PROJECT}" \
-        --epochs "${P1_EPOCHS}" \
-        --patience "${P1_PATIENCE}" \
-        ${FORCE_FLAG}
-
-    log "### Phase 1 — Collecting baseline metrics into pipeline_summary/"
-    run_cmd phase1_collect python "${YOLO_SEG_DIR}/collect_phase_metrics.py" \
-        --phase baseline \
-        --models "${MODELS[@]}" \
-        --project "${PROJECT}"
+        "${BUDGET_ARGS[@]}" "${FORCE_ARGS[@]}"
+    run_or_die phase1_collect python "${YOLO_SEG_DIR}/collect_phase_metrics.py" \
+        --phase phase1 --models "${MODELS[@]}" --project "${PROJECT}"
 fi
 
-# ---------- Phase 2 — HPO ---------------------------------------------------
+# ---------- Phase 2 — Baseline cross-validation -----------------------------
 if has_phase 2; then
     log ""
-    log "### Phase 2 — HPO via model.tune() (space=${HPO_SPACE}, iters=${HPO_ITERATIONS}, ep/trial=${HPO_EPOCHS_PER_TRIAL})"
+    log "### Phase 2 — Baseline ${CV_K_FOLDS}-fold CV on train+val (seed=${CV_SEED}; test isolated)"
     gpu_sanity_check phase2 || exit $?
-    # Redireciona o output do tuner para o diretório esperado por
-    # train_all_models.py e train_all_models_cv.py:
-    #   <project>/hpo/hpo_v3/tune_isic_2018_task_1_<model>/best_hyperparameters.yaml
-    HPO_PROJECT="${PROJECT}/hpo/hpo_v3"
-    mkdir -p "${HPO_PROJECT}"
-    run_cmd phase2 python "${YOLO_SEG_DIR}/tune_all_models_v2.py" \
-        --models "${MODELS[@]}" \
-        --data "${DATA_YAML}" \
-        --device "${GPU_DEVICE_IDS}" \
-        --project "${HPO_PROJECT}" \
-        --space "${HPO_SPACE}" \
-        --iterations "${HPO_ITERATIONS}" \
-        --epochs "${HPO_EPOCHS_PER_TRIAL}" \
-        --patience "${HPO_PATIENCE}" \
-        --batch "${HPO_BATCH}" \
-        ${FORCE_FLAG}
-
-    # Validação obrigatória: o Tuner da Ultralytics não propaga falhas de
-    # trial. Esta checagem detecta HPO degenerado (todos os trials com
-    # fitness=0) — sintoma típico de queda do driver NVIDIA durante a fase.
-    log "### Phase 2 — Validating HPO outputs (detectando trials degenerados)"
-    run_cmd phase2_validate python "${YOLO_SEG_DIR}/check_hpo_validity.py" \
-        --project "${PROJECT}" \
-        --models "${MODELS[@]}"
-fi
-
-# ---------- Phase 3 — Optimized single-split --------------------------------
-if has_phase 3; then
-    log ""
-    log "### Phase 3 — Optimized single-split fine-tuning (uses best_hyperparameters.yaml)"
-    gpu_sanity_check phase3 || exit $?
-    run_cmd phase3 python "${YOLO_SEG_DIR}/train_all_models.py" \
-        --models "${MODELS[@]}" \
-        --data "${DATA_YAML}" \
-        --device "${GPU_DEVICE_IDS}" \
-        --project "${PROJECT}" \
-        ${FORCE_FLAG}
-
-    log "### Phase 3 — Collecting optimized metrics into pipeline_summary/"
-    run_cmd phase3_collect python "${YOLO_SEG_DIR}/collect_phase_metrics.py" \
-        --phase optimized \
-        --models "${MODELS[@]}" \
-        --project "${PROJECT}"
-fi
-
-# ---------- Phase 4 — Cross-Validation --------------------------------------
-if has_phase 4; then
-    log ""
-    log "### Phase 4 — ${CV_K_FOLDS}-Fold CV (seed=${CV_SEED}, ${CV_EPOCHS} ep, patience=${CV_PATIENCE})"
-    gpu_sanity_check phase4 || exit $?
-    run_cmd phase4 python "${YOLO_SEG_DIR}/train_all_models_cv.py" \
+    run_or_die phase2 python "${YOLO_SEG_DIR}/train_all_models_cv.py" \
+        --protocol baseline \
         --models "${MODELS[@]}" \
         --data "${DATA_YAML}" \
         --device "${GPU_DEVICE_IDS}" \
         --project "${PROJECT}" \
         --k-folds "${CV_K_FOLDS}" \
         --seed "${CV_SEED}" \
-        --epochs "${CV_EPOCHS}" \
-        --patience "${CV_PATIENCE}" \
-        ${FORCE_FLAG}
+        "${BUDGET_ARGS[@]}" "${FORCE_ARGS[@]}"
+    run_or_die phase2_consolidate python "${YOLO_SEG_DIR}/consolidate_cv_results.py" \
+        --protocol baseline --models "${MODELS[@]}" --project "${PROJECT}"
+    log "### Phase 2 — Pixel-level DSC/JSI of each fold on its held-out fold (device ${BENCH_DEVICE})"
+    run_or_die phase2_pixels python "${YOLO_SEG_DIR}/evaluate_cv_pixels.py" \
+        --protocol baseline \
+        --models "${MODELS[@]}" \
+        --device "${BENCH_DEVICE}" \
+        --project "${PROJECT}" \
+        "${FORCE_ARGS[@]}"
+fi
 
-    log "### Phase 4 — Consolidating CV results across models"
-    run_cmd phase4_consolidate python "${YOLO_SEG_DIR}/consolidate_cv_results.py" \
+# ---------- Phase 3 — HPO (fault-tolerant, retried on exit 75) --------------
+if has_phase 3; then
+    log ""
+    log "### Phase 3 — HPO (space=${HPO_SPACE}, ${HPO_ITERATIONS} trials x ${HPO_EPOCHS_PER_TRIAL} ep, seeded, resumable)"
+    # --force only applies to the first attempt; retries must resume, not restart.
+    HPO_FORCE_ARGS=("${FORCE_ARGS[@]}")
+    max_attempts=$((HPO_MAX_RETRIES + 1))
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+        rc=0
+        if ! gpu_sanity_check "phase3#${attempt}"; then
+            rc=${EXIT_GPU_UNAVAILABLE}
+        else
+            run_cmd phase3 python "${YOLO_SEG_DIR}/tune_all_models_v2.py" \
+                --models "${MODELS[@]}" \
+                --data "${DATA_YAML}" \
+                --device "${GPU_DEVICE_IDS}" \
+                --project "${PROJECT}" \
+                --space "${HPO_SPACE}" \
+                --iterations "${HPO_ITERATIONS}" \
+                --epochs "${HPO_EPOCHS_PER_TRIAL}" \
+                --patience "${HPO_PATIENCE}" \
+                --batch "${HPO_BATCH}" \
+                "${HPO_FORCE_ARGS[@]}" || rc=$?
+        fi
+        HPO_FORCE_ARGS=()
+        if [[ ${rc} -eq 0 ]]; then
+            break
+        fi
+        if [[ ${rc} -ne ${EXIT_GPU_UNAVAILABLE} ]]; then
+            log "Pipeline aborted at step 'phase3' (exit ${rc}, not a GPU failure). Fix the cause and re-run to resume."
+            exit "${rc}"
+        fi
+        if [[ ${attempt} -ge ${max_attempts} ]]; then
+            log "[erro] Phase 3: GPU indisponível após ${max_attempts} tentativa(s). Recupere o driver e re-execute — a busca continua do último trial."
+            exit "${EXIT_GPU_UNAVAILABLE}"
+        fi
+        log "    [phase3] GPU indisponível (exit ${rc}) — tentativa ${attempt}/${max_attempts}; nova tentativa em ${HPO_RETRY_WAIT}s (retoma do último trial)."
+        [[ "${DRY_RUN}" -eq 1 ]] || sleep "${HPO_RETRY_WAIT}"
+    done
+
+    # The Ultralytics Tuner does not propagate trial failures; this check also
+    # rejects incomplete searches (hpo_state.json must be 'complete').
+    log "### Phase 3 — Validating HPO outputs (completeness + degenerate trials)"
+    run_or_die phase3_validate python "${YOLO_SEG_DIR}/check_hpo_validity.py" \
+        --project "${PROJECT}" \
+        --models "${MODELS[@]}" \
+        --iterations "${HPO_ITERATIONS}"
+fi
+
+# ---------- Phase 4 — Optimised fine-tuning ---------------------------------
+if has_phase 4; then
+    log ""
+    log "### Phase 4 — Optimised fine-tuning with the Phase 3 hyperparameters"
+    gpu_sanity_check phase4 || exit $?
+    run_or_die phase4 python "${YOLO_SEG_DIR}/train_all_models.py" \
+        --models "${MODELS[@]}" \
+        --data "${DATA_YAML}" \
+        --device "${GPU_DEVICE_IDS}" \
+        --project "${PROJECT}" \
+        "${BUDGET_ARGS[@]}" "${FORCE_ARGS[@]}"
+    run_or_die phase4_collect python "${YOLO_SEG_DIR}/collect_phase_metrics.py" \
+        --phase phase4 --models "${MODELS[@]}" --project "${PROJECT}"
+fi
+
+# ---------- Phase 5 — Test set inference & profiling ------------------------
+if has_phase 5; then
+    log ""
+    log "### Phase 5 — Test set evaluation of Baseline AND Optimised (device ${BENCH_DEVICE})"
+    for script in evaluate_test_set.py benchmark_efficiency.py build_final_report.py; do
+        if [[ ! -f "${YOLO_SEG_DIR}/${script}" ]]; then
+            log "[erro] Phase 5: ${YOLO_SEG_DIR}/${script} não existe (ainda não implementado)."
+            exit 4
+        fi
+    done
+    for m in "${MODELS[@]}"; do
+        require_complete_run "${PROJECT}/phase1_baseline/yolo26_${m}_baseline" "Baseline ${m}"
+        require_complete_run "${PROJECT}/phase4_optimized/yolo26_${m}_optimized" "Optimised ${m}"
+    done
+    gpu_sanity_check phase5 || exit $?
+    read -r -a PRECISIONS <<<"${EVAL_PRECISIONS}"
+    run_or_die phase5_accuracy python "${YOLO_SEG_DIR}/evaluate_test_set.py" \
+        --models "${MODELS[@]}" \
+        --variants baseline optimized \
+        --precisions "${PRECISIONS[@]}" \
+        --data "${DATA_YAML}" \
+        --device "${BENCH_DEVICE}" \
+        --project "${PROJECT}" \
+        "${FORCE_ARGS[@]}"
+    run_or_die phase5_efficiency python "${YOLO_SEG_DIR}/benchmark_efficiency.py" \
+        --models "${MODELS[@]}" \
+        --variants baseline optimized \
+        --precisions "${PRECISIONS[@]}" \
+        --data "${DATA_YAML}" \
+        --device "${BENCH_DEVICE}" \
+        --project "${PROJECT}" \
+        "${FORCE_ARGS[@]}"
+    run_or_die phase5_report python "${YOLO_SEG_DIR}/build_final_report.py" \
         --models "${MODELS[@]}" \
         --project "${PROJECT}"
 fi
@@ -345,5 +450,5 @@ fi
 log ""
 log "=============================================================="
 log "Pipeline finished. Per-phase logs: ${PIPELINE_LOG_DIR}/"
-log "Consolidated artefacts: ${PROJECT}/pipeline_summary/"
+log "Consolidated artefacts: ${PROJECT}/summary/"
 log "=============================================================="

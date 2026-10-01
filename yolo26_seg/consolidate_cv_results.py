@@ -1,32 +1,21 @@
-"""Consolidate Phase 4 (cross-validation) results into a paper-ready CSV+JSON.
+"""Consolidate Phase 2 (cross-validation) results into a paper-ready CSV + JSON.
 
-For every requested variant, this script reads the per-model
-``metrics_summary.json`` produced by :mod:`train_all_models_cv` at::
+For every requested variant, this script reads the ``metrics_summary.json``
+produced by :mod:`train_all_models_cv` at::
 
-    <project>/cv/<cv_version>/yolo26_<MODEL>_cv_isic_2018/metrics_summary.json
+    <project>/phase2_cv_<protocol>/yolo26_<MODEL>/metrics_summary.json
 
-and emits two consolidated artefacts under ``<project>/pipeline_summary/``:
+and writes under ``<project>/summary/``:
 
-* ``cv_consolidated.csv`` — one row per model, with ``mean`` and ``std`` of
-  mAP@50, mAP@50-95, Precision, Recall and F1-Score (Box and Mask). Convenient
-  for direct ingestion into LaTeX ``booktabs`` tables.
-* ``cv_consolidated.json`` — structured payload with both per-fold metrics
-  and the aggregated summary for every model. Convenient for the analysis
-  notebooks under ``utils/notebooks/``.
+* ``phase2_cv_<protocol>.csv`` — one row per model with ``mean`` and ``std``
+  (sample std, ddof=1) of mAP@50, mAP@50-95, Precision, Recall and F1 (Box
+  and Mask). Ready for LaTeX ``booktabs`` tables.
+* ``phase2_cv_<protocol>.json`` — per-fold metrics and the aggregate for every
+  model; consumed by the analysis notebooks.
 
 Usage:
-    # Consolidate all five variants (default)::
-
-        python consolidate_cv_results.py
-
-    # Consolidate a subset::
-
-        python consolidate_cv_results.py --models small medium large
-
-    # Point at a non-default CV version / output directory::
-
-        python consolidate_cv_results.py \\
-            --cv-version cv_v1 --out-dir /workspace/logs/pipeline_summary
+    python consolidate_cv_results.py --project /workspace/logs/pipeline_final_v1
+    python consolidate_cv_results.py --protocol optimized --models small
 """
 
 from __future__ import annotations
@@ -37,6 +26,8 @@ import json
 import sys
 from pathlib import Path
 
+from common import DEFAULT_PIPELINE_ROOT, PipelinePaths
+
 #: Canonical order of model sizes used across the pipeline.
 DEFAULT_ORDER: list[str] = ["nano", "small", "medium", "large", "xlarge"]
 
@@ -45,7 +36,7 @@ DEFAULT_ORDER: list[str] = ["nano", "small", "medium", "large", "xlarge"]
 REPORT_METRICS: list[str] = [
     "map50_b", "map5095_b", "precision_b", "recall_b", "f1_b",
     "map50_m", "map5095_m", "precision_m", "recall_m", "f1_m",
-    "best_epoch",
+    "best_epoch", "epochs_trained",
 ]
 
 
@@ -54,49 +45,28 @@ def parse_args() -> argparse.Namespace:
 
     Returns:
         Parsed ``argparse.Namespace`` with attributes ``models``,
-        ``project``, ``cv_version`` and ``out_dir``.
+        ``project`` and ``protocol``.
     """
     p = argparse.ArgumentParser(
-        description="Consolidate Phase 4 CV results per model into CSV + JSON.",
+        description="Consolidate Phase 2 CV results per model into CSV + JSON.",
     )
     p.add_argument(
         "--models", nargs="+", default=DEFAULT_ORDER, choices=DEFAULT_ORDER,
         help=f"Subset of models to consolidate (default: {DEFAULT_ORDER}).",
     )
     p.add_argument(
-        "--project", default="/workspace/logs",
-        help="Root directory for logs (default: /workspace/logs).",
+        "--project", default=DEFAULT_PIPELINE_ROOT,
+        help=f"Pipeline root (default: {DEFAULT_PIPELINE_ROOT}).",
     )
     p.add_argument(
-        "--cv-version", default="cv_v1",
-        help="CV version subdirectory under <project>/cv/ (default: cv_v1).",
-    )
-    p.add_argument(
-        "--out-dir", default=None,
-        help="Output directory (default: <project>/pipeline_summary).",
+        "--protocol", choices=["baseline", "optimized"], default="baseline",
+        help="CV protocol to consolidate (default: baseline = Phase 2).",
     )
     return p.parse_args()
 
 
-def cv_summary_path(project: Path, cv_version: str, model: str) -> Path:
-    """Return the canonical ``metrics_summary.json`` path for a CV run.
-
-    Args:
-        project: Root logs directory.
-        cv_version: CV version subdirectory (e.g. ``"cv_v1"``).
-        model: Variant name.
-
-    Returns:
-        ``<project>/cv/<cv_version>/yolo26_<model>_cv_isic_2018/metrics_summary.json``.
-    """
-    return (
-        project / "cv" / cv_version
-        / f"yolo26_{model}_cv_isic_2018" / "metrics_summary.json"
-    )
-
-
 def load_model_summary(path: Path) -> dict:
-    """Load a single ``metrics_summary.json`` produced by Phase 4.
+    """Load a single ``metrics_summary.json`` produced by Phase 2.
 
     Args:
         path: Path to the JSON file.
@@ -151,14 +121,14 @@ def _write_csv(per_model: list[dict], csv_path: Path) -> None:
 def _write_json(
     per_model: list[dict],
     missing: list[str],
-    cv_version: str,
+    protocol: str,
     json_path: Path,
 ) -> None:
     """Write the consolidated JSON payload."""
     with json_path.open("w") as f:
         json.dump(
             {
-                "cv_version": cv_version,
+                "protocol": protocol,
                 "models": per_model,
                 "missing": missing,
             },
@@ -170,23 +140,25 @@ def main() -> int:
     """Consolidate CV summaries and write CSV + JSON.
 
     Returns:
-        ``0`` if at least one model summary was found, ``1`` otherwise.
+        ``0`` if every requested model has a summary, ``1`` otherwise.
     """
     args = parse_args()
-    project = Path(args.project).resolve()
-    out_dir = Path(args.out_dir) if args.out_dir else project / "pipeline_summary"
+    paths = PipelinePaths(Path(args.project).resolve())
+    out_dir = paths.summary_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
     per_model: list[dict] = []
     missing: list[str] = []
 
     for m in args.models:
-        path = cv_summary_path(project, args.cv_version, m)
+        path = paths.cv_model_dir(m, args.protocol) / "metrics_summary.json"
         if not path.exists():
             print(f"  [warn] CV summary not found for {m}: {path}")
             missing.append(m)
             continue
         payload = load_model_summary(path)
+        if payload.get("std_ddof") != 1:
+            print(f"  [warn] {m}: summary predates the sample-std fix — re-run Phase 2 to refresh it")
         per_model.append({
             "model": m,
             "n_folds": payload.get("n_folds"),
@@ -196,17 +168,17 @@ def main() -> int:
         })
         _print_per_model_line(m, payload)
 
-    csv_path = out_dir / "cv_consolidated.csv"
-    json_path = out_dir / "cv_consolidated.json"
+    csv_path = out_dir / f"phase2_cv_{args.protocol}.csv"
+    json_path = out_dir / f"phase2_cv_{args.protocol}.json"
     _write_csv(per_model, csv_path)
-    _write_json(per_model, missing, args.cv_version, json_path)
+    _write_json(per_model, missing, args.protocol, json_path)
 
     print("\nConsolidated artefacts:")
     print(f"  CSV : {csv_path}")
     print(f"  JSON: {json_path}")
     if missing:
         print(f"  [warn] models without a summary: {missing}")
-    return 0 if per_model else 1
+    return 0 if not missing else 1
 
 
 if __name__ == "__main__":

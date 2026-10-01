@@ -1,228 +1,107 @@
-"""Consolidate single-split Phase 1 / Phase 3 metrics into CSV + JSON.
+"""Consolidate single-split validation metrics of Phase 1 or Phase 4 into CSV + JSON.
 
-For a given phase (``baseline`` for Phase 1 or ``optimized`` for Phase 3)
-this script walks the per-model ``results.csv`` files, selects the best
-epoch using the Ultralytics default criterion (``metrics/mAP50-95(M)``),
-derives F1-Score (Box and Mask), and writes a consolidated CSV + JSON in
-``<project>/pipeline_summary/<phase>_metrics.{csv,json}``.
+For each variant this script reads the run's ``results.csv``, selects the
+epoch that produced ``best.pt`` (identified from the checkpoint itself, see
+:func:`training.parse_best_metrics`), derives F1 (Box and Mask) and writes::
 
-Directory layout consumed by this script::
+    <project>/summary/<phase>_val.csv
+    <project>/summary/<phase>_val.json
 
-    Phase 1 (baseline):  <project>/phase1_baseline/yolo26_<MODEL>_baseline/results.csv
-    Phase 3 (optimized): <project>/yolo26_<MODEL>_ft_isic_2018_v11/results.csv
+The values are **validation-split** metrics; test-set metrics are produced in
+Phase 5. Runs that are not complete (``run_state.json`` status other than
+``complete``) are reported as missing.
 
 Usage:
-    # Phase 1 (baseline)::
-
-        python collect_phase_metrics.py --phase baseline
-
-    # Phase 3 (optimized)::
-
-        python collect_phase_metrics.py --phase optimized
-
-    # A subset of variants::
-
-        python collect_phase_metrics.py --phase optimized --models small medium
+    python collect_phase_metrics.py --phase phase1 --project /workspace/logs/pipeline_final_v1
+    python collect_phase_metrics.py --phase phase4 --models small medium
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import json
 import sys
 from pathlib import Path
 
-#: Canonical order of model sizes used across the pipeline.
-DEFAULT_ORDER: list[str] = ["nano", "small", "medium", "large", "xlarge"]
-
-#: Mapping from short metric keys to Ultralytics column names (``results.csv``).
-METRIC_KEYS: dict[str, str] = {
-    "precision_b":  "metrics/precision(B)",
-    "recall_b":     "metrics/recall(B)",
-    "map50_b":      "metrics/mAP50(B)",
-    "map5095_b":    "metrics/mAP50-95(B)",
-    "precision_m":  "metrics/precision(M)",
-    "recall_m":     "metrics/recall(M)",
-    "map50_m":      "metrics/mAP50(M)",
-    "map5095_m":    "metrics/mAP50-95(M)",
-}
-
-#: Column used to pick the best epoch (Ultralytics default for segmentation).
-BEST_EPOCH_KEY: str = "metrics/mAP50-95(M)"
+from common import DEFAULT_ORDER, DEFAULT_PIPELINE_ROOT, PipelinePaths, atomic_write_json, read_json
+from training import RUN_STATE_FILE, parse_best_metrics
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for the per-phase consolidator.
+    """Parse command-line arguments.
 
     Returns:
-        Parsed ``argparse.Namespace`` with attributes ``phase``, ``models``,
-        ``project`` and ``out_dir``.
+        Parsed ``argparse.Namespace`` with ``phase``, ``models``, ``project``.
     """
     p = argparse.ArgumentParser(
-        description=(
-            "Collect single-split metrics (Phase 1 or Phase 3) into CSV / JSON."
-        ),
+        description="Collect single-split validation metrics (Phase 1 or 4) into CSV / JSON.",
     )
     p.add_argument(
-        "--phase", choices=["baseline", "optimized"], required=True,
-        help="Phase to collect: 'baseline' (Phase 1) or 'optimized' (Phase 3).",
+        "--phase", choices=["phase1", "phase4"], required=True,
+        help="'phase1' (baseline) or 'phase4' (optimised).",
     )
     p.add_argument(
         "--models", nargs="+", default=DEFAULT_ORDER, choices=DEFAULT_ORDER,
         help=f"Subset of models to consolidate (default: {DEFAULT_ORDER}).",
     )
     p.add_argument(
-        "--project", default="/workspace/logs",
-        help="Root directory for logs (default: /workspace/logs).",
-    )
-    p.add_argument(
-        "--out-dir", default=None,
-        help="Output directory (default: <project>/pipeline_summary).",
+        "--project", default=DEFAULT_PIPELINE_ROOT,
+        help=f"Pipeline root (default: {DEFAULT_PIPELINE_ROOT}).",
     )
     return p.parse_args()
 
 
-def results_csv_path(project: Path, phase: str, model: str) -> Path:
-    """Return the canonical ``results.csv`` path for a phase / variant.
-
-    Args:
-        project: Root logs directory.
-        phase: ``"baseline"`` (Phase 1) or ``"optimized"`` (Phase 3).
-        model: Variant name.
-
-    Returns:
-        Path to the ``results.csv`` produced by the Ultralytics trainer.
-    """
-    if phase == "baseline":
-        return project / "phase1_baseline" / f"yolo26_{model}_baseline" / "results.csv"
-    # ``optimized`` — path emitted by ``train_all_models.py`` (VERSION ``v11``).
-    return project / f"yolo26_{model}_ft_isic_2018_v11" / "results.csv"
+def run_dir(paths: PipelinePaths, phase: str, model: str) -> Path:
+    """Return the training run directory of ``model`` in ``phase``."""
+    if phase == "phase1":
+        return paths.phase1_dir / paths.phase1_run_name(model)
+    return paths.phase4_dir / paths.phase4_run_name(model)
 
 
-def parse_best_epoch_metrics(results_csv: Path) -> dict[str, float]:
-    """Return the metrics of the best epoch from a ``results.csv``.
-
-    The best epoch is selected with the Ultralytics default criterion for
-    segmentation (``metrics/mAP50-95(M)``). F1-Score is derived from
-    precision and recall (Box and Mask) using ``2PR/(P+R)``.
-
-    Args:
-        results_csv: Path to the Ultralytics-generated CSV.
-
-    Returns:
-        Dict containing the eight metrics from :data:`METRIC_KEYS`, plus
-        ``f1_b``, ``f1_m`` and ``best_epoch``.
-
-    Raises:
-        ValueError: If the CSV is empty.
-    """
-    rows: list[dict] = []
-    with results_csv.open() as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append({k.strip(): v for k, v in row.items()})
-    if not rows:
-        raise ValueError(f"results.csv is empty: {results_csv}")
-
-    best_row = max(
-        rows, key=lambda r: float(r.get(BEST_EPOCH_KEY, "0") or 0.0),
-    )
-
-    out: dict[str, float] = {}
-    for short, full in METRIC_KEYS.items():
-        out[short] = float(best_row.get(full, "0") or 0.0)
-    for suffix in ("b", "m"):
-        p = out[f"precision_{suffix}"]
-        r = out[f"recall_{suffix}"]
-        out[f"f1_{suffix}"] = (2 * p * r / (p + r)) if (p + r) > 0 else 0.0
-    out["best_epoch"] = float(best_row.get("epoch", "0") or 0.0)
-    return out
-
-
-def _collect_model_row(project: Path, phase: str, model: str) -> dict | None:
-    """Collect one row of consolidated metrics for a single variant.
-
-    Returns ``None`` when the ``results.csv`` is missing or unreadable; the
-    caller is expected to record the variant in the ``missing`` list.
-    """
-    csv_path = results_csv_path(project, phase, model)
-    if not csv_path.exists():
-        print(f"  [warn] results.csv not found for {model}: {csv_path}")
+def collect_row(paths: PipelinePaths, phase: str, model: str) -> dict | None:
+    """Return one consolidated row, or ``None`` if the run is missing/incomplete."""
+    rd = run_dir(paths, phase, model)
+    state = read_json(rd / RUN_STATE_FILE)
+    if state is None or state.get("status") != "complete":
+        print(f"  [warn] {model}: run not complete ({rd})")
         return None
-    try:
-        metrics = parse_best_epoch_metrics(csv_path)
-    except Exception as e:
-        print(f"  [error] failed to read {csv_path}: {e}")
-        return None
+    metrics = parse_best_metrics(rd / "results.csv", rd / "weights" / "best.pt")
+    resumed = any(e.get("event") == "resume" for e in state.get("events", []))
     print(
-        f"  {model:<8} : "
-        f"mAP50(M)={metrics['map50_m']:.4f} "
-        f"mAP50-95(M)={metrics['map5095_m']:.4f} "
-        f"P(M)={metrics['precision_m']:.4f} "
-        f"R(M)={metrics['recall_m']:.4f} "
-        f"F1(M)={metrics['f1_m']:.4f}",
+        f"  {model:<8} : mAP50(M)={metrics['map50_m']:.4f} mAP50-95(M)={metrics['map5095_m']:.4f} "
+        f"P(M)={metrics['precision_m']:.4f} R(M)={metrics['recall_m']:.4f} F1(M)={metrics['f1_m']:.4f}",
     )
-    return {"model": model, "results_csv": str(csv_path), **metrics}
-
-
-def _write_artifacts(
-    phase: str,
-    per_model: list[dict],
-    missing: list[str],
-    out_dir: Path,
-) -> tuple[Path, Path]:
-    """Write the consolidated CSV and JSON artefacts."""
-    csv_out = out_dir / f"{phase}_metrics.csv"
-    json_out = out_dir / f"{phase}_metrics.json"
-
-    if per_model:
-        fieldnames = ["model", "results_csv"] + sorted(
-            k for k in per_model[0] if k not in ("model", "results_csv")
-        )
-        with csv_out.open("w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=fieldnames)
-            w.writeheader()
-            for row in per_model:
-                w.writerow(row)
-
-    with json_out.open("w") as f:
-        json.dump(
-            {"phase": phase, "models": per_model, "missing": missing},
-            f, indent=2, sort_keys=True,
-        )
-    return csv_out, json_out
+    return {"model": model, "split": "val", "resumed": resumed, "run_dir": str(rd), **metrics}
 
 
 def main() -> int:
     """Collect per-model metrics for one phase and write CSV + JSON.
 
     Returns:
-        ``0`` if at least one model was successfully read, ``1`` otherwise.
+        ``0`` if every requested model was collected, ``1`` otherwise.
     """
     args = parse_args()
-    project = Path(args.project).resolve()
-    out_dir = Path(args.out_dir) if args.out_dir else project / "pipeline_summary"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = PipelinePaths(Path(args.project))
+    paths.summary_dir.mkdir(parents=True, exist_ok=True)
 
-    per_model: list[dict] = []
-    missing: list[str] = []
-
+    rows, missing = [], []
     for m in args.models:
-        row = _collect_model_row(project, args.phase, m)
-        if row is None:
-            missing.append(m)
-            continue
-        per_model.append(row)
+        row = collect_row(paths, args.phase, m)
+        (rows.append(row) if row else missing.append(m))
 
-    csv_out, json_out = _write_artifacts(args.phase, per_model, missing, out_dir)
+    csv_out = paths.summary_dir / f"{args.phase}_val.csv"
+    json_out = paths.summary_dir / f"{args.phase}_val.json"
+    if rows:
+        with csv_out.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+    atomic_write_json(json_out, {"phase": args.phase, "split": "val", "models": rows, "missing": missing})
 
-    print("\nGenerated artefacts:")
-    print(f"  CSV : {csv_out}")
-    print(f"  JSON: {json_out}")
+    print(f"\nGenerated: {csv_out}\n           {json_out}")
     if missing:
-        print(f"  [warn] no results for: {missing}")
-    return 0 if per_model else 1
+        print(f"  [warn] missing/incomplete: {missing}")
+    return 0 if not missing else 1
 
 
 if __name__ == "__main__":
