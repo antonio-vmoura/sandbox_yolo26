@@ -95,7 +95,7 @@ Every step is idempotent and resumable — **re-running the same command continu
 ```
 sandbox_yolo26/
 ├── run_pipeline.sh            # 5-phase orchestrator
-├── wait_gpu.sh                # optional: start a run once the GPUs are idle
+├── wait_gpu.sh                # optional: start the pipeline once a GPU is idle
 ├── Dockerfile                 # pinned environment
 ├── yolo26_seg/
 │   ├── common.py              # protocols, seeds, paths, shared helpers
@@ -161,6 +161,7 @@ docker build -t yolo26_ft .
 GPU_DEVICE_IDS="0,1"
 PIPELINE_NAME="pipeline_final_v1"
 
+mkdir -p "logs/${PIPELINE_NAME}"     # the terminal log goes inside the pipeline folder
 docker run --gpus all -it --rm \
     --ipc=host \
     --user "$(id -u):$(id -g)" \
@@ -179,7 +180,7 @@ docker run --gpus all -it --rm \
     -v /etc/group:/etc/group:ro \
     yolo26_ft \
     bash /workspace/run_pipeline.sh \
-    2>&1 | tee "logs/${PIPELINE_NAME}_$(date -u +%Y%m%dT%H%M%SZ).log"
+    2>&1 | tee "logs/${PIPELINE_NAME}/terminal_$(date -u +%Y%m%dT%H%M%SZ).log"
 ```
 
 `--gpus all` exposes every GPU to the container; `GPU_DEVICE_IDS` selects the ones used for (DDP) training.
@@ -296,10 +297,12 @@ screen -S yolo26_ft        # start; run the docker command above
 screen -r yolo26_ft        # reattach
 ```
 
-Wait for idle GPUs before starting (edit the `docker run` blocks at the bottom of the script first):
+Wait for an idle GPU, then launch the pipeline on it (extra arguments go to `run_pipeline.sh`; the terminal log is
+written to `logs/<pipeline>/terminal_<UTC>.log`):
 
 ```bash
-chmod +x wait_gpu.sh && ./wait_gpu.sh
+GPU_DEVICE=0 ./wait_gpu.sh                              # resume / run the whole study on host GPU 0
+GPU_DEVICE=0 ./wait_gpu.sh --phases "1 2 3 4 5" --force # start Phases 1-5 over (old outputs -> *.bak-<UTC>)
 ```
 
 Copy the results to your machine:
