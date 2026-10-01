@@ -21,7 +21,7 @@
 GPU_DEVICE="${GPU_DEVICE:-0}"
 PIPELINE_NAME="${PIPELINE_NAME:-pipeline_final_v1}"
 # Raw official ISIC 2018 Task 1 release (Phase 0 input, mounted read-only).
-RAW_DATASET="${RAW_DATASET:-$(pwd)/../datasets/ISIC2018_Task1_Raw}"
+RAW_DATASET="${RAW_DATASET:-$(pwd)/../datasets/ISIC2018_Raw}"
 CHECK_INTERVAL=60
 REQUIRED_IDLE_MINUTES=3
 IDLE_COUNT=0
