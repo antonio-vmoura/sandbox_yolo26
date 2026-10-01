@@ -63,7 +63,7 @@ from training import METRIC_KEYS, RUN_STATE_FILE
 
 #: Version of the evaluation method. Part of the cache key: bump it whenever the
 #: metric definitions or the evaluation protocol change.
-EVAL_VERSION: int = 1
+EVAL_VERSION: int = 2   # 2: + boundary metrics (BIoU, NSD)
 
 VARIANTS: tuple[str, ...] = ("baseline", "optimized")
 PRECISIONS: tuple[str, ...] = ("fp32", "fp16")

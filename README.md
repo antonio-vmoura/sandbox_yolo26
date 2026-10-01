@@ -13,6 +13,7 @@ https://www.ultralytics.com/blog/how-to-custom-train-ultralytics-yolo26-for-inst
 
 | Phase | What | Data | Script(s) |
 |---|---|---|---|
+| **0 — Dataset** | YOLO-seg dataset built from the **raw official ISIC 2018 Task 1 release** (`../datasets/ISIC2018_Raw`): exactly **2,594 / 100 / 1,000** images (asserted); long side ≤ 1,024 px (aspect preserved); official masks kept in `masks/` as the evaluation ground truth; YOLO polygons (holes bridged) for training, fidelity-checked | raw release | `prepare_dataset.py` |
 | **1 — Baseline training** | Fixed base setup + Ultralytics **default** hyperparameters | train / val | `train_baseline_models.py` |
 | **2 — Baseline cross-validation** | Deterministic 5-fold CV with the Phase 1 configuration; DSC/JSI of each fold on its held-out fold | train ∪ val pool (**test excluded and verified**) | `train_all_models_cv.py`, `consolidate_cv_results.py`, `evaluate_cv_pixels.py` |
 | **3 — HPO** | Ultralytics genetic tuner with a **seeded** mutation RNG; **fault-tolerant and resumable** | train / val | `tune_all_models_v2.py`, `check_hpo_validity.py` |
@@ -84,10 +85,11 @@ Every step is idempotent and resumable — **re-running the same command continu
 ## Requirements
 
 * Docker with NVIDIA GPU support (NVIDIA Container Toolkit)
-* Dataset in YOLO segmentation format with `train`, `val` **and** `test` splits:
+* The raw official ISIC 2018 Task 1 release in `../datasets/ISIC2018_Raw` (training/validation/test inputs and
+  ground truths); Phase 0 converts it to the YOLO segmentation dataset (`train`, `val` **and** `test` splits):
 
 ```
-./datasets/isic_2018_task1_yolo26/data.yaml
+./datasets/isic2018_task1_official/data.yaml   # built by Phase 0 from ../datasets/ISIC2018_Raw
 ```
 
 ## Project structure
@@ -95,7 +97,7 @@ Every step is idempotent and resumable — **re-running the same command continu
 ```
 sandbox_yolo26/
 ├── run_pipeline.sh            # 5-phase orchestrator
-├── wait_gpu.sh                # optional: start a run once the GPUs are idle
+├── wait_gpu.sh                # optional: start the pipeline once a GPU is idle
 ├── Dockerfile                 # pinned environment
 ├── yolo26_seg/
 │   ├── common.py              # protocols, seeds, paths, shared helpers
@@ -116,7 +118,9 @@ sandbox_yolo26/
 ├── notebooks/
 │   ├── 01_Segmentation_Visualizer.ipynb
 │   └── 02_Metrics_and_Efficiency_Analysis.ipynb
-├── utils/                     # earlier analysis notebooks and helper scripts
+├── utils/legacy/              # earlier helper scripts and examples (kept as a backup)
+├── figures/legacy/            # earlier qualitative figures
+├── notebooks/legacy/          # earlier analysis notebooks (kept as a backup)
 ├── datasets/  logs/  cache/   # data, outputs, weights (not versioned)
 ```
 
@@ -147,6 +151,24 @@ logs/pipeline_final_v1/
 
 ---
 
+## ISIC 2018 Task 2 (lesion attributes) — Phase 0
+
+Phase 0 also builds the **multi-label** dataset of ISIC 2018 Task 2 from the same raw folder (`ISIC2018_Raw`, which
+holds the shared Task 1-2 input images and the ground truths of both tasks):
+
+```bash
+# inside yolo26_ft, raw release mounted at /workspace/raw (as wait_gpu.sh does)
+python /workspace/yolo26_seg/prepare_dataset.py --task 2      # -> datasets/isic2018_task2_official
+```
+
+Five classes, id = attribute index (`pigment_network`, `negative_network`, `streaks`, `milia_like_cyst`,
+`globules`): each attribute mask becomes polygons of its class; attributes may overlap (overlapping polygons of
+different classes coexist) and an image may have none. The per-attribute official masks are kept in
+`masks/<attribute>/<id>.png`, label fidelity is checked per attribute, and the same 2,594 / 100 / 1,000 images are
+asserted. `--task 1` is the default everywhere (the orchestrator and `wait_gpu.sh` run Task 1); **Phases 1–5
+currently implement Task 1 only** — Task 2 training/evaluation will need multi-class model selection and
+per-attribute metrics.
+
 ## Running the pipeline
 
 ### Build the image
@@ -161,6 +183,7 @@ docker build -t yolo26_ft .
 GPU_DEVICE_IDS="0,1"
 PIPELINE_NAME="pipeline_final_v1"
 
+mkdir -p "logs/${PIPELINE_NAME}"     # the terminal log goes inside the pipeline folder
 docker run --gpus all -it --rm \
     --ipc=host \
     --user "$(id -u):$(id -g)" \
@@ -170,6 +193,7 @@ docker run --gpus all -it --rm \
     -e GPU_DEVICE_IDS="${GPU_DEVICE_IDS}" \
     -e PIPELINE_NAME="${PIPELINE_NAME}" \
     -v "$(pwd)/datasets:/workspace/datasets" \
+    -v "$(pwd)/../datasets/ISIC2018_Raw:/workspace/raw:ro" \
     -v "$(pwd)/logs:/workspace/logs" \
     -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
     -v "$(pwd)/utils:/workspace/utils" \
@@ -179,7 +203,7 @@ docker run --gpus all -it --rm \
     -v /etc/group:/etc/group:ro \
     yolo26_ft \
     bash /workspace/run_pipeline.sh \
-    2>&1 | tee "logs/${PIPELINE_NAME}_$(date -u +%Y%m%dT%H%M%SZ).log"
+    2>&1 | tee "logs/${PIPELINE_NAME}/terminal_$(date -u +%Y%m%dT%H%M%SZ).log"
 ```
 
 `--gpus all` exposes every GPU to the container; `GPU_DEVICE_IDS` selects the ones used for (DDP) training.
@@ -268,6 +292,7 @@ docker run --gpus all -it --rm -p 8888:8888 \
     --user "$(id -u):$(id -g)" \
     -e HOME=/workspace/cache \
     -v "$(pwd)/datasets:/workspace/datasets" \
+    -v "$(pwd)/../datasets/ISIC2018_Raw:/workspace/raw:ro" \
     -v "$(pwd)/logs:/workspace/logs" \
     -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
     -v "$(pwd)/notebooks:/workspace/notebooks" \
@@ -296,10 +321,12 @@ screen -S yolo26_ft        # start; run the docker command above
 screen -r yolo26_ft        # reattach
 ```
 
-Wait for idle GPUs before starting (edit the `docker run` blocks at the bottom of the script first):
+Wait for an idle GPU, then launch the pipeline on it (extra arguments go to `run_pipeline.sh`; the terminal log is
+written to `logs/<pipeline>/terminal_<UTC>.log`):
 
 ```bash
-chmod +x wait_gpu.sh && ./wait_gpu.sh
+GPU_DEVICE=0 ./wait_gpu.sh                              # resume / run the whole study on host GPU 0
+GPU_DEVICE=0 ./wait_gpu.sh --phases "1 2 3 4 5" --force # start Phases 1-5 over (old outputs -> *.bak-<UTC>)
 ```
 
 Copy the results to your machine:
