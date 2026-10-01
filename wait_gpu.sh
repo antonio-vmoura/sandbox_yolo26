@@ -13,8 +13,8 @@
 #
 # This is a convenience helper for shared GPU hosts: it lets you queue an
 # experiment to start as soon as the host frees up, without writing a full
-# scheduler. The canonical pipeline (``run_pipeline.sh``) does NOT use this
-# script — it is kept here for opportunistic, manual usage.
+# scheduler. It launches the canonical pipeline (``run_pipeline.sh``); edit the
+# ``docker run`` blocks at the bottom to choose what starts.
 #
 # Configurable knobs (edit in place if needed)
 # --------------------------------------------
@@ -69,73 +69,36 @@ done
 # -----------------------------------------------------------------------------
 # Editable docker invocations (the actual workload to start once GPUs free up).
 # Comment or uncomment as needed; the loop above will fall through into these.
+# run_pipeline.sh is resumable: re-launching the same command continues an
+# interrupted study instead of starting over.
 # -----------------------------------------------------------------------------
+PIPELINE_NAME="${PIPELINE_NAME:-pipeline_final_v1}"
+DOCKER_ARGS=(
+  --gpus all --rm --ipc=host
+  --user "$(id -u):$(id -g)"
+  -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache
+  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+  -e PIPELINE_NAME="${PIPELINE_NAME}"
+  -v "$(pwd)/datasets:/workspace/datasets"
+  -v "$(pwd)/logs:/workspace/logs"
+  -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg"
+  -v "$(pwd)/utils:/workspace/utils"
+  -v "$(pwd)/cache:/workspace/cache"
+  -v "$(pwd)/run_pipeline.sh:/workspace/run_pipeline.sh:ro"
+  -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro
+)
 
-# Example A: optimised fine-tuning of a single variant (legacy script name)
-docker run --gpus all -it --rm \
-  --ipc=host \
-  --user $(id -u):$(id -g) \
-  -e TORCH_HOME=/workspace/cache/torch \
-  -e HOME=/workspace/cache \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v $(pwd)/datasets:/workspace/datasets \
-  -v $(pwd)/logs:/workspace/logs \
-  -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
-  -v $(pwd)/utils:/workspace/utils \
-  -v $(pwd)/cache:/workspace/cache \
-  -v /etc/passwd:/etc/passwd:ro \
-  -v /etc/group:/etc/group:ro \
-  yolo26_ft \
-  python /workspace/yolo26_seg/train_isic_2018_task_1_v8.py --model large 2>&1 | tee logs/yolo26_large_ft_isic_2018_v8.log
+# Example A: the full 5-phase study, all model sizes
+docker run "${DOCKER_ARGS[@]}" yolo26_ft \
+  bash /workspace/run_pipeline.sh \
+  2>&1 | tee "logs/${PIPELINE_NAME}_$(date -u +%Y%m%dT%H%M%SZ).log"
 
+# Example B: HPO (Phase 3) for xlarge only, FP32 on 32 GB GPUs (micro-batch 16)
+# docker run "${DOCKER_ARGS[@]}" yolo26_ft \
+#   bash /workspace/run_pipeline.sh --phases "3" --models x --hpo-batch 16 \
+#   2>&1 | tee "logs/${PIPELINE_NAME}_hpo_xlarge_$(date -u +%Y%m%dT%H%M%SZ).log"
 
-# Example B: ad-hoc HPO of a single variant (smoke / quick sweep)
-docker run --gpus all -it --rm \
-  --ipc=host \
-  --user $(id -u):$(id -g) \
-  -e TORCH_HOME=/workspace/cache/torch \
-  -e HOME=/workspace/cache \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v $(pwd)/datasets:/workspace/datasets \
-  -v $(pwd)/logs:/workspace/logs \
-  -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
-  -v $(pwd)/utils:/workspace/utils \
-  -v $(pwd)/cache:/workspace/cache \
-  -v /etc/passwd:/etc/passwd:ro \
-  -v /etc/group:/etc/group:ro \
-  yolo26_ft \
-  python /workspace/yolo26_seg/tune_isic_2018_task_1.py \
-  --model nano --iterations 3 --epochs 5 | tee logs/tune_isic_2018_task_1.log
-
-
-# Example C: refined HPO over all sizes (legacy ``tune_all_models.py``)
-docker run --gpus all -it --rm --ipc=host \
-  --user $(id -u):$(id -g) \
-  -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v $(pwd)/datasets:/workspace/datasets \
-  -v $(pwd)/logs:/workspace/logs \
-  -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
-  -v $(pwd)/utils:/workspace/utils \
-  -v $(pwd)/cache:/workspace/cache \
-  -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
-  yolo26_ft \
-  python /workspace/yolo26_seg/tune_all_models.py \
-    --space refined --iterations 50 \
-  2>&1 | tee logs/tune_all_refined.log
-
-
-# Example D: 5-Fold CV for the four smaller variants (skipping ``small``)
-docker run --gpus all -it --rm --ipc=host \
-  --user $(id -u):$(id -g) \
-  -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v $(pwd)/datasets:/workspace/datasets \
-  -v $(pwd)/logs:/workspace/logs \
-  -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
-  -v $(pwd)/utils:/workspace/utils \
-  -v $(pwd)/cache:/workspace/cache \
-  -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
-  yolo26_ft \
-  python /workspace/yolo26_seg/train_all_models_cv.py --models nano medium large xlarge \
-  2>&1 | tee logs/train_all_models_cv_all_less_small_v1.log
+# Example C: Phase 5 only (test set + efficiency) on GPU 1, once Phases 1-4 are done
+# docker run "${DOCKER_ARGS[@]}" yolo26_ft \
+#   bash /workspace/run_pipeline.sh --phases "5" --bench-device 1 \
+#   2>&1 | tee "logs/${PIPELINE_NAME}_phase5_$(date -u +%Y%m%dT%H%M%SZ).log"

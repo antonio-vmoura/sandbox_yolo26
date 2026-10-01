@@ -1,373 +1,167 @@
-# YOLO26 Fine-Tuning
+# YOLO26 Fine-Tuning — Skin Lesion Segmentation (ISIC 2018 Task 1)
 
-This repository provides scripts and configuration files for fine-tuning the **Ultralytics YOLO26** model in a custom dataset, focusing on skin lesion instance segmentation.
-
-The goal is to evaluate how well YOLO26 adapts to medical images with limited data, leveraging its state-of-the-art segmentation capabilities.
+This repository contains the experimental pipeline used to evaluate **Ultralytics YOLO26-seg** (sizes n, s, m, l, x)
+for skin-lesion segmentation on ISIC 2018 Task 1. The study measures the *raw* architecture first and only then the
+effect of hyperparameter optimisation (HPO), and it reports both accuracy and the hardware efficiency needed to argue
+that the models are lightweight enough for deployment.
 
 https://www.ultralytics.com/blog/how-to-custom-train-ultralytics-yolo26-for-instance-segmentation
 
 ---
 
-## Overview
+## The 5-phase protocol
 
-The training pipeline includes:
+| Phase | What | Data | Script(s) |
+|---|---|---|---|
+| **1 — Baseline training** | Fixed base setup + Ultralytics **default** hyperparameters | train / val | `train_baseline_models.py` |
+| **2 — Baseline cross-validation** | Deterministic 5-fold CV with the Phase 1 configuration; DSC/JSI of each fold on its held-out fold | train ∪ val pool (**test excluded and verified**) | `train_all_models_cv.py`, `consolidate_cv_results.py`, `evaluate_cv_pixels.py` |
+| **3 — HPO** | Ultralytics genetic tuner with a **seeded** mutation RNG; **fault-tolerant and resumable** | train / val | `tune_all_models_v2.py`, `check_hpo_validity.py` |
+| **4 — Optimised fine-tuning** | Same fixed base setup + Phase 3 **tuned** hyperparameters | train / val | `train_all_models.py` |
+| **5 — Test set** | Baseline **and** Optimised on the unseen test set: instance metrics (mAP/P/R/F1), pixel metrics (DSC, JSI, ISIC thresholded JSI), batch-1 efficiency in **FP32 and FP16**, final report | **test** (only here) | `evaluate_test_set.py`, `benchmark_efficiency.py`, `build_final_report.py` |
 
-* Loading and preparing the dataset (Roboflow YOLO format)
-* Fine-tuning YOLO26 for instance segmentation
-* Automatic saving of checkpoints, confusion matrices, and metrics
-* Fully reproducible execution via Docker with GPU support
+Everything is orchestrated by **`run_pipeline.sh`**; all shared settings live in **`yolo26_seg/common.py`**.
+
+### One base setup for every phase (Baseline vs. Optimised = default vs. tuned hyperparameters)
+
+Every training run — Baseline (Phases 1–2), every HPO trial (Phase 3) and Optimised (Phase 4) — uses the same fixed
+**base setup**. **Baseline = base setup + Ultralytics default hyperparameters; Optimised = base setup + tuned
+hyperparameters**, so the tuned values (learning rate, momentum, weight decay, warm-up, loss gains, augmentation)
+are the **only** variable between them. The first HPO trial starts from the default hyperparameters clipped to the
+search bounds; note that in the `refined` space the defaults `lr0=0.01` and `weight_decay=5e-4` lie outside the bounds,
+so the Baseline's own values are not candidates of the search. Deviations of the base setup from the Ultralytics defaults:
+
+| Setting | Value | Ultralytics default | Why |
+|---|---|---|---|
+| `epochs` / `patience` | 120 / 25 | 100 / 100 | Same budget for every training phase (HPO trials: 30 / 10). |
+| `amp` | `False` (FP32) | `True` | The xlarge variant overflowed in FP16 (NaN in the cls-loss); FP32 everywhere keeps numerical conditions uniform across sizes. |
+| `optimizer` | `MuSGD` | `auto` | `auto` picks AdamW or MuSGD from the number of iterations and then ignores `lr0`/`momentum`; an explicit optimiser makes both the default and the tuned `lr0`/`momentum` effective. |
+| `cos_lr` | `True` | `False` | One learning-rate schedule for every phase. |
+
+Pinned values equal to the defaults (pinned so an upstream change cannot alter the protocol): `batch=16`, `nbs=64`,
+`imgsz=640`, `workers=8`, `close_mosaic=10`, `seed=0`, `deterministic=True`. A tuned-hyperparameter file or a search
+space that tries to change any base-setup key is rejected.
+
+**Best epoch.** Every validation / cross-validation metric taken from a training log is read at the epoch that produced
+`best.pt` — identified from the metrics stored in the checkpoint itself, falling back to the Ultralytics fitness
+(box mAP50-95 + mask mAP50-95, latest epoch on ties). Reported validation metrics therefore always describe the
+exact checkpoint that is evaluated in Phase 5.
+
+### Reproducibility
+
+* `torch.manual_seed`, `np.random.seed`, `random.seed`, `PYTHONHASHSEED`, deterministic cuDNN/cuBLAS — see
+  `common.seed_everything()`.
+* **K-Fold** without scikit-learn: `numpy.random.RandomState(0)` shuffle + contiguous folds (bit-identical to
+  `KFold(shuffle=True, random_state=0)`). `splits_manifest.json` fingerprints the folds; a re-run with different splits is refused.
+* **HPO:** the upstream Tuner re-seeds its mutations from the clock. `SeededTuner` uses
+  `np.random.default_rng([seed, trial])`, so the hyperparameters of trial *i* depend only on the seed, *i* and the
+  fitness history. Caveat for the thesis: proposals are bit-reproducible given identical fitness values; fitness comes
+  from GPU training, which is deterministic only up to `deterministic=True` (`warn_only`) and DDP reduction order.
+* **Pinned environment** (`Dockerfile`): `torch==2.5.1`, `torchvision==0.20.1`, `torchaudio==2.5.1` (`+cu121`),
+  `ultralytics==8.4.21`, `pandas==3.0.1`. The HPO checkpoint refuses to resume under another Ultralytics version.
+* **Statistics:** CV mean ± **sample** SD (ddof = 1) over folds; test metrics as per-image mean with a seeded
+  bootstrap 95 % CI; HPO gain as a paired difference with bootstrap CI and Wilcoxon signed-rank test.
+
+### Fault tolerance
+
+Every step is idempotent and resumable — **re-running the same command continues where it stopped**:
+
+* **Training runs** (Phases 1, 2, 4) record completion in `run_state.json`; an interrupted run resumes from `last.pt`
+  (the resume is logged, because the dataloader RNG state is not checkpointed, so a resumed run is not bit-identical).
+  Duplicate epoch rows that Ultralytics writes after a resume are de-duplicated before picking the best epoch.
+* **HPO** (Phase 3) checkpoints `hpo_state.json` atomically before every trial. On resume it removes the interrupted
+  trial's folder and a torn CSV line; a failed trial (fitness 0) is retried with identical hyperparameters up to
+  `--max-trial-retries` times. Changing the search space/protocol/seed refuses to resume.
+* **GPU/driver failures:** `tune_all_models_v2.py` exits with **75** when the GPU is unhealthy; `run_pipeline.sh`
+  then waits `HPO_RETRY_WAIT` seconds and retries up to `HPO_MAX_RETRIES` times (resuming each time). A GPU sanity
+  check runs before every phase.
+* **Locks** prevent two processes from writing the same run or HPO search.
+* `--force` starts a phase over **without deleting anything**: previous outputs are moved to `*.bak-<UTC>`.
+* Phase 5 results are cached by the SHA-256 of the weights, the test list and the measurement settings
+  (including a method version), so they are recomputed exactly when something relevant changed.
 
 ---
 
 ## Requirements
 
-* Docker with NVIDIA GPU support
-* NVIDIA Container Toolkit installed
-* Dataset (in YOLO format) available at:
+* Docker with NVIDIA GPU support (NVIDIA Container Toolkit)
+* Dataset in YOLO segmentation format with `train`, `val` **and** `test` splits:
 
 ```
-./datasets/<dataset_name>
+./datasets/isic_2018_task1_yolo26/data.yaml
+```
 
+## Project structure
+
+```
+sandbox_yolo26/
+├── run_pipeline.sh            # 5-phase orchestrator
+├── wait_gpu.sh                # optional: start a run once the GPUs are idle
+├── Dockerfile                 # pinned environment
+├── yolo26_seg/
+│   ├── common.py              # protocols, seeds, paths, shared helpers
+│   ├── training.py            # resumable training runs + results.csv parsing
+│   ├── segmentation_metrics.py# DSC / JSI / ... (pixel level)
+│   ├── train_baseline_models.py        # Phase 1
+│   ├── train_all_models_cv.py          # Phase 2
+│   ├── consolidate_cv_results.py       # Phase 2 summary
+│   ├── evaluate_cv_pixels.py           # Phase 2 DSC/JSI per fold
+│   ├── tune_all_models_v2.py           # Phase 3
+│   ├── check_hpo_validity.py           # Phase 3 validation
+│   ├── train_all_models.py             # Phase 4
+│   ├── collect_phase_metrics.py        # Phase 1/4 summaries
+│   ├── evaluate_test_set.py            # Phase 5a
+│   ├── benchmark_efficiency.py         # Phase 5b
+│   ├── build_final_report.py           # Phase 5c
+│   └── legacy/                         # superseded scripts (kept for old notebooks)
+├── notebooks/
+│   ├── 01_Segmentation_Visualizer.ipynb
+│   └── 02_Metrics_and_Efficiency_Analysis.ipynb
+├── utils/                     # earlier analysis notebooks and helper scripts
+├── datasets/  logs/  cache/   # data, outputs, weights (not versioned)
+```
+
+## Output layout
+
+All outputs of the study live under `logs/pipeline_final_v1/` (change with `--pipeline-name`), isolated from older runs:
+
+```
+logs/pipeline_final_v1/
+├── phase1_baseline/yolo26_<m>_baseline/          weights/, results.csv, run_state.json
+├── phase2_cv_baseline/yolo26_<m>/                splits/, splits_manifest.json, runs/fold_<k>/,
+│                                                 metrics_per_fold.csv, metrics_summary.json,
+│                                                 pixel_metrics_per_fold.csv, pixel_metrics_summary.json
+├── phase3_hpo/tune_<m>/                          tune_results.csv, best_hyperparameters.yaml,
+│                                                 hpo_state.json, trials/
+├── phase4_optimized/yolo26_<m>_optimized/        weights/, results.csv, run_state.json, tuned_hyperparameters.yaml
+├── phase5_test/
+│   ├── accuracy/<variant>_<m>_<fp32|fp16>.json   instance + pixel metrics, weights SHA-256
+│   ├── per_image/<variant>_<m>_<fp32|fp16>.csv   per-image DSC, JSI, TP/FP/FN/TN, ...
+│   ├── masks/<variant>_<m>/<image>.png           predicted masks (FP32) for notebook 01
+│   ├── efficiency/<variant>_<m>_<fp32|fp16>.json latency, FPS, VRAM, RAM, size, params, GFLOPs
+│   └── val_runs/                                 Ultralytics test-set plots
+├── summary/                                      phase1_val, phase2_cv_baseline, phase2_cv_pixel, phase4_val,
+│                                                 test_accuracy, efficiency, hpo_gain, final_results (.csv/.json)
+├── figures/  tables/                             written by the notebooks (PDF/PNG, LaTeX)
+└── pipeline_runs/<UTC>/                          pipeline.log + one log per step
 ```
 
 ---
 
-## Expected Project Structure
+## Running the pipeline
 
-```
-sandbox_sam3/
-│
-├── logs/               # Training outputs
-├── dataset/            # Dataset
-├── yolo26_seg/         # Model source code
-└── utils/              # Useful scripts
-```
-
----
-
-## Environment Setup
-
-### Build the Docker Image
-
-Build the environment containing CUDA, PyTorch, and all necessary dependencies:
+### Build the image
 
 ```bash
 docker build -t yolo26_ft .
 ```
 
----
-
-## Training Execution
-
-### Option A: Run training using ALL available GPUs
-
-```bash
-docker run --gpus all -it --rm \
-  --ipc=host \
-  --user $(id -u):$(id -g) \
-  -e TORCH_HOME=/workspace/cache/torch \
-  -e HOME=/workspace/cache \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v $(pwd)/datasets:/workspace/datasets \
-  -v $(pwd)/logs:/workspace/logs \
-  -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
-  -v $(pwd)/utils:/workspace/utils \
-  -v $(pwd)/cache:/workspace/cache \
-  -v /etc/passwd:/etc/passwd:ro \
-  -v /etc/group:/etc/group:ro \
-  yolo26_ft \
-  python /workspace/yolo26_seg/train.py 2>&1 | tee logs/yolo26_ft_ph2.log
-
-```
-
-### Option B: Run training using a SINGLE GPU
-
-```bash
-docker run --gpus '"device=0"' -it --rm \
-  --ipc=host \
-  --user $(id -u):$(id -g) \
-  -e TORCH_HOME=/workspace/cache/torch \
-  -e HOME=/workspace/cache \
-  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  -v $(pwd)/datasets:/workspace/datasets \
-  -v $(pwd)/logs:/workspace/logs \
-  -v $(pwd)/yolo26_seg:/workspace/yolo26_seg \
-  -v $(pwd)/utils:/workspace/utils \
-  -v $(pwd)/cache:/workspace/cache \
-  -v /etc/passwd:/etc/passwd:ro \
-  -v /etc/group:/etc/group:ro \
-  yolo26_ft \
-  python /workspace/yolo26_seg/train.py 2>&1 | tee logs/yolo26_ft_ph2_gpu0.log
-
-```
-
-### Option C: Automated Training (Wait for Free GPUs)
-
-```bash
-chmod +x wait_gpu.sh
-```
-
-```bash
-./wait_gpu.sh
-```
-
----
-
-## Running on a Remote Server
-
-### Run training in the background
-
-Create a screen session:
-
-```bash
-screen -S yolo26_ft
-
-```
-
-Run the Docker command normally. Detach while keeping the process running:
-
-```text
-Ctrl + A, then D
-
-```
-
-Reattach later:
-
-```bash
-screen -r yolo26_ft
-
-```
-
----
-
-### Copy results from the server
-
-```bash
-rsync -avz --progress -e "ssh -p 13508 -v" antoniovinicius@164.41.75.221:/home/antoniovinicius/projects/SANDBOX_YOLO26/logs/ph2_finetuning /home/avmoura_linux/Documents/unb/SANDBOX_YOLO26
-
-```
-
----
-
-### Environment Setup
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install ultralytics jupyterlab
-```
-
----
-
-### Hardware Monitoring
-
-```bash
-nvidia-smi
-nvtop
-```
-
----
-
-## End-to-End Pipeline (`run_pipeline.sh`)
-
-The master orchestrator `run_pipeline.sh` chains the four phases of the
-ISIC 2018 Task 1 study for all five YOLO26-seg sizes (n, s, m, l, x):
-
-1. **Phase 1 — Baseline:** Ultralytics defaults, `epochs=120`,
-   `patience=20`, `deterministic=True`, `seed=0`, `amp=False`
-   (single explicit deviation from the Ultralytics default — see
-   [reproducibility note](#a-note-on-amp-mixed-precision) below).
-   Implemented by `yolo26_seg/train_baseline_models.py`.
-2. **Phase 2 — HPO:** per-model `model.tune()` using the refined search
-   space from session `21d1...`. Implemented by
-   `yolo26_seg/tune_all_models_v2.py`. Outputs are written to
-   `<project>/hpo/hpo_v3/tune_isic_2018_task_1_<model>/best_hyperparameters.yaml`,
-   which is the path expected by Phases 3 and 4.
-3. **Phase 3 — Optimized single-split:** full fine-tuning using the
-   `best_hyperparameters.yaml` from Phase 2 (120 epochs, `MuSGD`,
-   cosine LR, `patience=25`). Implemented by
-   `yolo26_seg/train_all_models.py`.
-4. **Phase 4 — 5-Fold Cross-Validation:** deterministic NumPy-only KFold
-   (`seed=0`, K=5) over the train+val pool of the original
-   `data.yaml` (test split untouched). Implemented by
-   `yolo26_seg/train_all_models_cv.py`. Final consolidation
-   (mean ± std for mAP@50, mAP@50-95, Precision, Recall, F1-Score —
-   Box and Mask) is produced by
-   `yolo26_seg/consolidate_cv_results.py`.
-
-Single-split summaries (Phases 1 and 3) are extracted from `results.csv`
-by `yolo26_seg/collect_phase_metrics.py`.
-
-### Recommended Logs Layout
-
-Every artefact of a pipeline run is isolated under
-`logs/<PIPELINE_NAME>/` (default `logs/pipeline_e2e_v1/`) so it does **not**
-mix with the previous standalone fine-tunings that live directly under
-`logs/`. Change `PIPELINE_NAME` (env var or `--pipeline-name`) to start a
-fresh run alongside the previous one.
-
-```
-logs/
-├── pipeline_e2e_v1/                                 # ← PIPELINE_NAME
-│   ├── phase1_baseline/
-│   │   └── yolo26_<model>_baseline/{weights/best.pt, results.csv, args.yaml, ...}
-│   ├── hpo/
-│   │   └── hpo_v3/tune_isic_2018_task_1_<model>/best_hyperparameters.yaml
-│   ├── yolo26_<model>_ft_isic_2018_v11/{weights/best.pt, results.csv, ...}    # Phase 3
-│   ├── cv/
-│   │   └── cv_v1/yolo26_<model>_cv_isic_2018/{splits/, runs/,
-│   │       metrics_per_fold.csv, metrics_summary.json}
-│   ├── pipeline_summary/
-│   │   ├── baseline_metrics.{csv,json}
-│   │   ├── optimized_metrics.{csv,json}
-│   │   └── cv_consolidated.{csv,json}
-│   └── pipeline_runs/<UTC-timestamp>/{pipeline.log, phase1.log, phase2.log, ...}
-│
-├── pipeline_e2e_v2/                                 # ← a future re-run
-│   └── ...
-└── <legacy standalone runs, untouched>              # e.g. yolo26_small_ft_isic_2018_v11/
-```
-
-The nested layout is automatic: the orchestrator passes
-`--project /workspace/logs/<PIPELINE_NAME>` to every Python helper, so
-all sub-folders (`phase1_baseline/`, `hpo/hpo_v3/`,
-`yolo26_<model>_ft_isic_2018_v11/`, `cv/cv_v1/`, `pipeline_summary/`,
-`pipeline_runs/`) end up inside the same isolated parent.
-
-### A note on AMP (mixed precision)
-
-All four phases run with **`amp=False`** (FP32 throughout). This is a
-deliberate, **uniform** deviation from the Ultralytics default
-(`amp=True`) for Phases 1 and 2 — Phases 3 and 4 were already FP32 in
-the upstream scripts.
-
-Rationale (defensible for publication):
-
-* During an earlier run on the GPU host, the **xlarge** variant produced
-  `NaN` in the classification loss at epoch 42 with `amp=True` —
-  consistent with an FP16 overflow in the cls-head that the AMP gradient
-  scaler did not catch. The Ultralytics auto-recovery then failed because
-  the saved `last.pt` checkpoint was already post-overflow.
-* Rather than disable AMP only for the failing variant (an asymmetric
-  fix that would weaken the cross-architecture comparison), we disable
-  AMP for **all five sizes** so that every model is trained under
-  numerically identical conditions.
-* Side benefit: FP32 results are invariant across Tensor Core
-  generations, strengthening hardware-independent reproducibility.
-
-Trade-off: ~30–40 % more GPU time vs. AMP across Phases 1 and 2; VRAM
-footprint roughly doubles (xlarge observed at ~10.8 GB with AMP; expect
-~14–16 GB FP32 — verify your GPU has headroom or reduce `batch`).
-
-Pass `--amp` to `train_baseline_models.py` to re-enable mixed precision
-for a specific Phase 1 run (e.g. when reproducing the original
-Ultralytics-default behaviour for an ablation).
-
-### A note on batch size (Phase 2 HPO on xlarge)
-
-Phases 1, 3 and 4 train every variant with `batch=16` (`nbs=64`,
-gradient accumulation 4 → **effective optimisation batch = 64**).
-Phase 2 HPO uses `batch=32` (`nbs=64`, gradient accumulation 2 →
-**also effective optimisation batch = 64**) for the nano, small,
-medium and large variants.
-
-For the **xlarge** variant, FP32 + DDP + `batch=32` does not fit in
-the 32 GB V100S (observed: 31.59 GB allocated per rank before the
-1st training iteration → `torch.OutOfMemoryError`). HPO trials for
-xlarge therefore use `batch=16` (`nbs=64` unchanged → accumulation 4),
-matching the protocol already used in Phases 1, 3 and 4 for xlarge.
-
-The orchestrator exposes this as `--hpo-batch` (CLI) / `HPO_BATCH`
-(env, default `32`). Example invocations:
-
-```bash
-# Default — applies to nano/small/medium/large
-bash run_pipeline.sh --phases "2" --models "nano small medium large"
-
-# xlarge — 32 GB GPUs require batch=16 under FP32+DDP
-bash run_pipeline.sh --phases "2 3 4" --models "xlarge" --hpo-batch 16
-# or via env:
-HPO_BATCH=16 bash run_pipeline.sh --phases "2 3 4" --models "xlarge"
-```
-
-**Why this preserves comparability between models:**
-
-* Ultralytics computes `accumulate = round(nbs/batch)` and accumulates
-  gradients across that many micro-batches before each optimiser
-  step. With `nbs=64` held constant, the **effective optimisation
-  batch is identical (64) for every variant and every phase**,
-  regardless of whether `batch=32` or `batch=16` is used at the
-  micro-step level.
-* The hyperparameter space being searched (`lr0`, `lrf`, `momentum`,
-  `weight_decay`, `cls`, `dfl`, augmentation strengths) operates on
-  the optimiser step — so the HPs discovered for xlarge are directly
-  comparable to those found for the other four variants at the same
-  effective batch size.
-* The only difference is per-step VRAM footprint and the number of
-  micro-batches forwarded between optimiser updates — neither of
-  which affects the gradient step magnitude or the loss-curve shape
-  at fixed effective batch.
-
-Suggested wording for the Methods section of a paper:
-
-> *Due to VRAM constraints on the V100S (32 GB), the xlarge variant
-> uses `batch=16` during HPO (vs. `batch=32` for the four smaller
-> variants); for the optimised fine-tuning and the 5-fold
-> cross-validation, all variants use `batch=16`. The nominal batch
-> size (`nbs=64`) is held constant across all phases and variants,
-> so the effective optimisation batch size is identical (64) across
-> the entire study. This affects only the micro-batch composition
-> and per-step memory footprint, not the gradient-step magnitude.*
-
-### Pipeline hardening: GPU sanity-check and HPO validity check
-
-Two safety checks added to the orchestrator after an earlier run hit
-infrastructure-level failures invisible to the trainer:
-
-1. **`gpu_sanity_check`** runs at the start of every phase (~1 s):
-   verifies that `nvidia-smi -L` reports GPUs **and** that
-   `torch.cuda.is_available()` returns `True`. If the driver died on
-   the host (e.g. an `nvidia.ko`/NVML hang after a long FP32 run),
-   the script aborts immediately with an actionable message instead
-   of wasting minutes inside the trainer.
-2. **`check_hpo_validity.py`** runs after Phase 2 and inspects every
-   `tune_results.csv` produced by Ultralytics' Tuner. If any model
-   has fewer than `--min-trials` rows with `fitness>0`, the pipeline
-   fails with a non-zero exit code. This catches **degenerate HPO**
-   runs — when the Tuner records `fitness=0` for failed trials and
-   silently emits a `best_hyperparameters.yaml` that is just the
-   seed vector (which we observed at scale after a driver crash).
-
-### Idempotency
-
-Each Python script already detects existing artefacts:
-
-* `train_baseline_models.py` skips models with an existing `best.pt`.
-* `tune_all_models_v2.py` skips models with an existing
-  `best_hyperparameters.yaml`.
-* `train_all_models.py` skips models with an existing `best.pt`.
-* `train_all_models_cv.py` skips folds and models with an existing
-  `results.csv` / `metrics_summary.json`.
-
-Pass `--force` to the orchestrator (or set `FORCE_FLAG=--force`) to
-re-execute every phase.
-
-### Running the pipeline inside Docker
-
-Build the image once:
-
-```bash
-docker build -t yolo26_ft .
-```
-
-Then run the orchestrator with explicit GPU allocation
-(`{GPU_DEVICE_IDS}` is a placeholder — substitute with e.g. `"0,1"`):
+### Full run (all 5 phases, all sizes)
 
 ```bash
 GPU_DEVICE_IDS="0,1"
-PIPELINE_NAME="pipeline_e2e_v1"   # rename for each new isolated run
+PIPELINE_NAME="pipeline_final_v1"
 
-docker run --gpus "\"device=${GPU_DEVICE_IDS}\"" -it --rm \
+docker run --gpus all -it --rm \
     --ipc=host \
     --user "$(id -u):$(id -g)" \
     -e TORCH_HOME=/workspace/cache/torch \
@@ -388,41 +182,128 @@ docker run --gpus "\"device=${GPU_DEVICE_IDS}\"" -it --rm \
     2>&1 | tee "logs/${PIPELINE_NAME}_$(date -u +%Y%m%dT%H%M%SZ).log"
 ```
 
-The Docker bind-mount `-v "$(pwd)/logs:/workspace/logs"` is the **parent
-`LOGS_ROOT`** — every pipeline run will write into a sub-directory of
-that mount (`logs/${PIPELINE_NAME}/...`), so previous standalone HPO/CV/FT
-artefacts already in `logs/` stay untouched.
+`--gpus all` exposes every GPU to the container; `GPU_DEVICE_IDS` selects the ones used for (DDP) training.
+Phase 5 runs on a single GPU (`--bench-device`, default: the first training GPU).
 
-Selecting a subset of phases or models:
+If the run is interrupted (crash, driver failure, reboot), **run the same command again** — it resumes.
+
+### Common variations (arguments after `bash /workspace/run_pipeline.sh`)
 
 ```bash
-# Only run HPO + Optimized + CV (skip Phase 1 baseline):
-bash /workspace/run_pipeline.sh --phases "2 3 4"
-
-# Only nano and small, all four phases:
-bash /workspace/run_pipeline.sh --models "n s"
-
-# Dry-run (prints commands only):
-bash /workspace/run_pipeline.sh --dry-run
-
-# Run an ablation under a separate folder so it doesn't touch the previous one:
-bash /workspace/run_pipeline.sh --pipeline-name pipeline_e2e_v2 --force
-
-# Use a completely custom project path (overrides PIPELINE_NAME):
-bash /workspace/run_pipeline.sh --project /workspace/logs/my_experiment
+--phases "3 4 5"                 # a subset of phases
+--models "n s"                   # a subset of sizes (n,s,m,l,x or full names)
+--models x --phases 3 --hpo-batch 16   # xlarge HPO in FP32 on 32 GB GPUs (see below)
+--dry-run                        # print the commands only
+--epochs 3 --patience 2          # SMOKE TEST ONLY (applied to Phases 1, 2 and 4 together)
+--pipeline-name pipeline_final_v2      # a fresh, isolated study
+--force                          # start the selected phases over (old outputs → *.bak-<UTC>)
 ```
 
-Useful environment overrides (defaults shown):
+Environment overrides (defaults): `CV_K_FOLDS=5`, `CV_SEED=0`, `HPO_SPACE=refined`, `HPO_ITERATIONS=30`,
+`HPO_EPOCHS_PER_TRIAL=30`, `HPO_PATIENCE=10`, `HPO_BATCH=32`, `HPO_MAX_RETRIES=5`, `HPO_RETRY_WAIT=600`,
+`EVAL_PRECISIONS="fp32 fp16"`, `BENCH_DEVICE`, `DATA_YAML`, `LOGS_ROOT`, `PROJECT`.
 
-| Variable | Default | Description |
-|---|---|---|
-| `DATA_YAML` | `/workspace/datasets/isic_2018_task1_yolo26/data.yaml` | Dataset YAML (Ultralytics/Roboflow format). |
-| `LOGS_ROOT` | `/workspace/logs` | Parent dir for every pipeline run. |
-| `PIPELINE_NAME` | `pipeline_e2e_v1` | Sub-dir under `LOGS_ROOT` that isolates THIS run from previous standalone fine-tunings (HPO/CV/FT) already living directly under `LOGS_ROOT`. |
-| `PROJECT` | `${LOGS_ROOT}/${PIPELINE_NAME}` | Final project root passed to every Python helper. Override (env or `--project`) to point anywhere else. |
-| `GPU_DEVICE_IDS` | `0,1` | Comma-separated GPU IDs (DDP). |
-| `P1_EPOCHS` / `P1_PATIENCE` | `120` / `20` | Baseline (Phase 1). |
-| `HPO_SPACE` / `HPO_ITERATIONS` / `HPO_EPOCHS_PER_TRIAL` / `HPO_PATIENCE` | `refined` / `30` / `30` / `10` | HPO (Phase 2). |
-| `CV_K_FOLDS` / `CV_SEED` / `CV_EPOCHS` / `CV_PATIENCE` | `5` / `0` / `120` / `25` | Cross-Validation (Phase 4). |
+Exit codes of `run_pipeline.sh`: `0` success · `75` the HPO gave up after repeated GPU failures (fix the driver and
+re-run to resume) · any other value is the exit code of the failing step (its log is in `pipeline_runs/<UTC>/`).
+
+### Phase 5 — what exactly is measured
+
+**Accuracy (`evaluate_test_set.py`)** — run once per variant × size × precision on the `test` split only:
+
+* Instance metrics from `model.val(split="test", batch=1)` (P, R, mAP50, mAP50-95, F1; Box and Mask).
+* Pixel metrics per image: ground truth = union of the YOLO label polygons rasterised at full resolution;
+  prediction = union of instance masks with `conf ≥ 0.25` at full resolution (`retina_masks=True`).
+  `DSC = 2TP/(2TP+FP+FN)`, `JSI = TP/(TP+FP+FN)`, ISIC thresholded JSI (`JSI < 0.65 → 0`), sensitivity,
+  specificity, accuracy. **An empty prediction scores 0** (never skipped); empty GT and empty prediction scores 1.
+* FP32 is the primary result (training was FP32); FP16 quantifies the accuracy cost of half precision.
+
+**Efficiency (`benchmark_efficiency.py`)** — `batch = 1`, one GPU, every configuration in a fresh process:
+
+* **Forward latency**: fused network on a fixed 1×3×640×640 input, timed with `torch.cuda.Event` + synchronise
+  per iteration (50 warm-up + 500 timed). **End-to-end latency**: `YOLO.predict()` on a real test image
+  (pre-processing, inference, mask post-processing), timed with `perf_counter` (20 + 200).
+* Reported: mean, SD, median, **P90/P95/P99**, min/max, **FPS** = 1000 / mean (and 1000 / median).
+* **VRAM**: steady-state peak allocated/reserved by PyTorch after warm-up (the warm-up peak, which includes
+  cuDNN autotuning workspaces, is stored separately; the CUDA context is excluded), and VRAM of the weights alone.
+  **RAM**: RSS after loading/benchmarking and peak RSS.
+* **Size**: `best.pt` on disk (stored in **FP16** by Ultralytics), theoretical FP32/FP16 sizes (fused params × 4/2 B),
+  parameter count (fused and unfused), GFLOPs at 640.
+* GPU utilisation is sampled before/after each run; a busy GPU marks the result `contended` (re-run on an idle GPU
+  before quoting those latencies). Baseline and Optimised share the architecture, so their efficiency should match.
+
+### Notes on AMP and batch size
+
+* **AMP** is disabled in every phase (see the table above). Trade-off: ~30–40 % more GPU time and roughly twice the
+  activation memory compared with AMP.
+* **HPO batch.** Phases 1, 2 and 4 use `batch=16`; Phase 3 trials use `batch=32` by default to speed up the search.
+  With `nbs=64` held constant, Ultralytics accumulates gradients (`accumulate = round(nbs / batch)`), so the
+  **effective optimisation batch is 64 in every phase and for every size**. For **xlarge** in FP32 + DDP, `batch=32`
+  does not fit in a 32 GB V100S, so use `--hpo-batch 16` (accumulation 4, still 64 effective).
+
+  Suggested wording: *"The nominal batch size (nbs = 64) is held constant across all phases and model sizes, so the
+  effective optimisation batch size is identical (64) throughout the study; only the micro-batch (16 or 32) and the
+  per-step memory footprint differ."*
 
 ---
+
+## Analysis notebooks
+
+| Notebook | Content |
+|---|---|
+| `notebooks/01_Segmentation_Visualizer.ipynb` | Test images with ground truth (green, solid border) and prediction (red, dashed border) for Baseline vs. Optimised; random sample, largest HPO gains/regressions, hardest cases. |
+| `notebooks/02_Metrics_and_Efficiency_Analysis.ipynb` | DSC/JSI across phases, paired HPO gain with *p*-values, accuracy vs. size/GFLOPs, latency vs. FPS, latency distribution (median/P95), VRAM/RAM, accuracy–latency trade-off, LaTeX tables. |
+
+They read only the files written by the pipeline (no GPU needed). The pipeline folder is found automatically
+(`$PIPELINE_DIR`, else `/workspace/logs/<name>`, else `logs/<name>`); figures go to `<pipeline>/figures/`
+(PDF + PNG), tables to `<pipeline>/tables/`.
+
+Run Jupyter inside the container:
+
+```bash
+docker run --gpus all -it --rm -p 8888:8888 \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/workspace/cache \
+    -v "$(pwd)/datasets:/workspace/datasets" \
+    -v "$(pwd)/logs:/workspace/logs" \
+    -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
+    -v "$(pwd)/notebooks:/workspace/notebooks" \
+    -v "$(pwd)/cache:/workspace/cache" \
+    yolo26_ft \
+    jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --notebook-dir=/workspace
+```
+
+or on the host (paths recorded as `/workspace/...` are mapped back to the checkout automatically):
+
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install ultralytics==8.4.21 pandas==3.0.1 jupyterlab
+jupyter lab notebooks/
+```
+
+---
+
+## Running on a remote server
+
+Run the pipeline inside a `screen` session so it survives a disconnect:
+
+```bash
+screen -S yolo26_ft        # start; run the docker command above
+# Ctrl + A, then D         # detach
+screen -r yolo26_ft        # reattach
+```
+
+Wait for idle GPUs before starting (edit the `docker run` blocks at the bottom of the script first):
+
+```bash
+chmod +x wait_gpu.sh && ./wait_gpu.sh
+```
+
+Copy the results to your machine:
+
+```bash
+rsync -avz --progress -e "ssh -p 13508" \
+    antoniovinicius@164.41.75.221:/home/antoniovinicius/projects/sandbox_yolo26/logs/pipeline_final_v1 \
+    /home/avmoura_linux/Documents/unb/SANDBOX_YOLO26/logs/
+```
+
+Hardware monitoring: `nvidia-smi`, `nvtop`.
