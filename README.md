@@ -118,7 +118,9 @@ sandbox_yolo26/
 ├── notebooks/
 │   ├── 01_Segmentation_Visualizer.ipynb
 │   └── 02_Metrics_and_Efficiency_Analysis.ipynb
-├── utils/                     # earlier analysis notebooks and helper scripts
+├── utils/legacy/              # earlier helper scripts and examples (kept as a backup)
+├── figures/legacy/            # earlier qualitative figures
+├── notebooks/legacy/          # earlier analysis notebooks (kept as a backup)
 ├── datasets/  logs/  cache/   # data, outputs, weights (not versioned)
 ```
 
