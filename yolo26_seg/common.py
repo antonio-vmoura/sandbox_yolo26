@@ -432,11 +432,17 @@ def config_hash(payload: Any) -> str:
 
 @contextmanager
 def exclusive_lock(directory: Path, name: str = ".lock") -> Iterator[None]:
-    """Hold a non-blocking exclusive ``flock`` on ``directory/name``.
+    """Hold a non-blocking exclusive POSIX lock (``lockf``) on ``directory/name``.
 
     Prevents two processes from writing the same run (e.g. a manual re-run
-    while the orchestrator is still training). The lock is released
-    automatically if the process dies.
+    while the orchestrator is still training).
+
+    ``lockf`` (not ``flock``): a POSIX record lock belongs to the *process*,
+    is not inherited by ``fork()``-ed children and is released as soon as the
+    process dies. With ``flock`` the lock belongs to the open file, which
+    forked DataLoader workers inherit; after a ``kill -9`` of the trainer the
+    orphaned workers kept the run locked and an immediate restart was refused
+    until they exited.
 
     Raises:
         RuntimeError: If another process already holds the lock.
@@ -445,13 +451,13 @@ def exclusive_lock(directory: Path, name: str = ".lock") -> Iterator[None]:
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / name).open("w") as fh:
         try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as e:
+            fcntl.lockf(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
             raise RuntimeError(f"another process is already working in {directory}") from e
         try:
             yield
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            fcntl.lockf(fh, fcntl.LOCK_UN)
 
 
 def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
