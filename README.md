@@ -116,10 +116,11 @@ sandbox_yolo26/
 │   ├── build_final_report.py           # Phase 5c
 │   └── legacy/                         # superseded scripts (kept for old notebooks)
 ├── analysis/                  # every Jupyter notebook + the cross-architecture tooling
-│   ├── 01_segmentation_visualizer.ipynb
-│   ├── 02_metrics_and_efficiency_analysis.ipynb
-│   ├── yolo_internal_analysis.ipynb
-│   ├── results_analysis.ipynb  results_aggregator.py  methodology_notes.md
+│   ├── 01_internal_analysis.ipynb          # run first: every phase, from the first epoch of Phase 1
+│   ├── 02_segmentation_visualizer.ipynb    # Phase 5
+│   ├── 03_metrics_and_efficiency.ipynb     # Phase 5
+│   ├── 04_cross_architecture_results.ipynb # Phase 5, all three architectures
+│   ├── results_aggregator.py  methodology_notes.md
 │   └── legacy/                # earlier analysis notebooks (kept as a backup)
 ├── utils/legacy/              # earlier helper scripts and examples (kept as a backup)
 ├── figures/legacy/            # earlier qualitative figures
@@ -291,10 +292,10 @@ re-run to resume) · any other value is the exit code of the failing step (its l
 
 | Notebook | Content |
 |---|---|
-| `analysis/01_segmentation_visualizer.ipynb` | Test images with ground truth (green, solid border) and prediction (red, dashed border) for Baseline vs. Optimised; random sample, largest HPO gains/regressions, hardest cases. |
-| `analysis/02_metrics_and_efficiency_analysis.ipynb` | DSC/JSI across phases, paired HPO gain with *p*-values, accuracy vs. size/GFLOPs, latency vs. FPS, latency distribution (median/P95), VRAM/RAM, accuracy–latency trade-off, LaTeX tables; standard figures A–C (identical in the three repositories): accuracy vs. latency/FPS/parameters, training and inference time with the real-time criterion, boundary metrics. |
-| `analysis/yolo_internal_analysis.ipynb` | Drill-down per phase with the five sizes side by side: inventory of runs, loss and metric curves (Phases 1 and 4), generalisation gap, convergence, CV folds, HPO convergence and hyperparameter–fitness correlation, test metrics (DSC, JSI, Boundary IoU, NSD, HD95), segmentation grid n → x, size vs. accuracy and speed vs. accuracy. Runs at any stage: missing phases are skipped. |
-| `analysis/results_analysis.ipynb` + `analysis/results_aggregator.py` | Cross-architecture tables (LaTeX), paired tests (Wilcoxon, Holm, Friedman) and figures over YOLO26, U-Net and SAM 3 — byte-identical copies in the three repositories; place them in the folder holding the three repositories (see `analysis/README.md`). |
+| `analysis/01_internal_analysis.ipynb` | Drill-down per phase with the five sizes side by side: inventory of runs, loss and metric curves (Phases 1 and 4), generalisation gap, convergence, CV folds, HPO convergence and hyperparameter–fitness correlation, test metrics (DSC, JSI, Boundary IoU, NSD, HD95), segmentation grid n → x, size vs. accuracy and speed vs. accuracy. Runs at any stage: missing phases are skipped. |
+| `analysis/02_segmentation_visualizer.ipynb` | Test images with ground truth (green, solid border) and prediction (red, dashed border) for Baseline vs. Optimised; random sample, largest HPO gains/regressions, hardest cases. |
+| `analysis/03_metrics_and_efficiency.ipynb` | DSC/JSI across phases, paired HPO gain with *p*-values, accuracy vs. size/GFLOPs, latency vs. FPS, latency distribution (median/P95), VRAM/RAM, accuracy–latency trade-off, LaTeX tables; standard figures A–C (identical in the three repositories): accuracy vs. latency/FPS/parameters, training and inference time with the real-time criterion, boundary metrics. |
+| `analysis/04_cross_architecture_results.ipynb` + `analysis/results_aggregator.py` | Cross-architecture tables (LaTeX), paired tests (Wilcoxon, Holm, Friedman) and figures over YOLO26, U-Net and SAM 3 — byte-identical copies in the three repositories; place them in the folder holding the three repositories (see `analysis/README.md`). |
 
 They read only the files written by the pipeline (no GPU needed). The pipeline folder is found automatically
 (`$PIPELINE_DIR`, else `/workspace/logs/<name>`, else `logs/<name>`); figures go to `<pipeline>/figures/`
