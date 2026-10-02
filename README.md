@@ -115,12 +115,15 @@ sandbox_yolo26/
 │   ├── benchmark_efficiency.py         # Phase 5b
 │   ├── build_final_report.py           # Phase 5c
 │   └── legacy/                         # superseded scripts (kept for old notebooks)
-├── notebooks/
-│   ├── 01_Segmentation_Visualizer.ipynb
-│   └── 02_Metrics_and_Efficiency_Analysis.ipynb
+├── analysis/                  # every Jupyter notebook + the cross-architecture tooling
+│   ├── 01_internal_analysis.ipynb          # run first: every phase, from the first epoch of Phase 1
+│   ├── 02_segmentation_visualizer.ipynb    # Phase 5
+│   ├── 03_metrics_and_efficiency.ipynb     # Phase 5
+│   ├── 04_cross_architecture_results.ipynb # Phase 5, all three architectures
+│   ├── results_aggregator.py  methodology_notes.md
+│   └── legacy/                # earlier analysis notebooks (kept as a backup)
 ├── utils/legacy/              # earlier helper scripts and examples (kept as a backup)
 ├── figures/legacy/            # earlier qualitative figures
-├── notebooks/legacy/          # earlier analysis notebooks (kept as a backup)
 ├── datasets/  logs/  cache/   # data, outputs, weights (not versioned)
 ```
 
@@ -289,9 +292,10 @@ re-run to resume) · any other value is the exit code of the failing step (its l
 
 | Notebook | Content |
 |---|---|
-| `notebooks/01_Segmentation_Visualizer.ipynb` | Test images with ground truth (green, solid border) and prediction (red, dashed border) for Baseline vs. Optimised; random sample, largest HPO gains/regressions, hardest cases. |
-| `notebooks/02_Metrics_and_Efficiency_Analysis.ipynb` | DSC/JSI across phases, paired HPO gain with *p*-values, accuracy vs. size/GFLOPs, latency vs. FPS, latency distribution (median/P95), VRAM/RAM, accuracy–latency trade-off, LaTeX tables; standard figures A–C (identical in the three repositories): accuracy vs. latency/FPS/parameters, training and inference time with the real-time criterion, boundary metrics. |
-| `article/Article_Figures_and_Tables.ipynb` + `article/article_aggregator.py` | Cross-architecture tables (LaTeX), paired tests (Wilcoxon, Holm, Friedman) and figures over YOLO26, U-Net and SAM 3 — byte-identical copies in the three repositories; place them in the folder holding the three repositories (see `article/README.md`). |
+| `analysis/01_internal_analysis.ipynb` | Drill-down per phase with the five sizes side by side: inventory of runs, loss and metric curves (Phases 1 and 4), generalisation gap, convergence, CV folds, HPO convergence and hyperparameter–fitness correlation, test metrics (DSC, JSI, Boundary IoU, NSD, HD95), segmentation grid n → x, size vs. accuracy and speed vs. accuracy. Runs at any stage: missing phases are skipped. |
+| `analysis/02_segmentation_visualizer.ipynb` | Test images with ground truth (green, solid border) and prediction (red, dashed border) for Baseline vs. Optimised; random sample, largest HPO gains/regressions, hardest cases. |
+| `analysis/03_metrics_and_efficiency.ipynb` | DSC/JSI across phases, paired HPO gain with *p*-values, accuracy vs. size/GFLOPs, latency vs. FPS, latency distribution (median/P95), VRAM/RAM, accuracy–latency trade-off, LaTeX tables; standard figures A–C (identical in the three repositories): accuracy vs. latency/FPS/parameters, training and inference time with the real-time criterion, boundary metrics. |
+| `analysis/04_cross_architecture_results.ipynb` + `analysis/results_aggregator.py` | Cross-architecture tables (LaTeX), paired tests (Wilcoxon, Holm, Friedman) and figures over YOLO26, U-Net and SAM 3 — byte-identical copies in the three repositories; place them in the folder holding the three repositories (see `analysis/README.md`). |
 
 They read only the files written by the pipeline (no GPU needed). The pipeline folder is found automatically
 (`$PIPELINE_DIR`, else `/workspace/logs/<name>`, else `logs/<name>`); figures go to `<pipeline>/figures/`
@@ -307,7 +311,7 @@ docker run --gpus all -it --rm -p 8888:8888 \
     -v "$(pwd)/../datasets/ISIC2018_Raw:/workspace/raw:ro" \
     -v "$(pwd)/logs:/workspace/logs" \
     -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
-    -v "$(pwd)/notebooks:/workspace/notebooks" \
+    -v "$(pwd)/analysis:/workspace/analysis" \
     -v "$(pwd)/cache:/workspace/cache" \
     yolo26_ft \
     jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --notebook-dir=/workspace
@@ -318,7 +322,7 @@ or on the host (paths recorded as `/workspace/...` are mapped back to the checko
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install ultralytics==8.4.21 pandas==3.0.1 jupyterlab
-jupyter lab notebooks/
+jupyter lab analysis/
 ```
 
 ---
