@@ -8,7 +8,8 @@ split of ``data.yaml`` — the only phase that ever touches it:
    P, R, mAP50, mAP50-95 and F1 for Box and Mask (``conf=0.001``, the
    standard mAP protocol).
 2. **Pixel metrics** — DSC, JSI, ISIC thresholded JSI, sensitivity,
-   specificity and accuracy per image (:mod:`segmentation_metrics`), with the
+   specificity, accuracy and the boundary metrics Boundary IoU, NSD and HD95
+   per image (:mod:`segmentation_metrics`), with the
    prediction taken as the union of instances with ``conf >= --conf``
    (default 0.25, the Ultralytics predict default) at the original image
    resolution. Empty predictions are scored as 0 (never skipped).
@@ -63,7 +64,7 @@ from training import METRIC_KEYS, RUN_STATE_FILE
 
 #: Version of the evaluation method. Part of the cache key: bump it whenever the
 #: metric definitions or the evaluation protocol change.
-EVAL_VERSION: int = 2   # 2: + boundary metrics (BIoU, NSD)
+EVAL_VERSION: int = 3   # 2: + boundary metrics (BIoU, NSD); 3: + HD95
 
 VARIANTS: tuple[str, ...] = ("baseline", "optimized")
 PRECISIONS: tuple[str, ...] = ("fp32", "fp16")
