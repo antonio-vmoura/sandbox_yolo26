@@ -291,7 +291,7 @@ re-run to resume) · any other value is the exit code of the failing step (its l
 |---|---|
 | `notebooks/01_Segmentation_Visualizer.ipynb` | Test images with ground truth (green, solid border) and prediction (red, dashed border) for Baseline vs. Optimised; random sample, largest HPO gains/regressions, hardest cases. |
 | `notebooks/02_Metrics_and_Efficiency_Analysis.ipynb` | DSC/JSI across phases, paired HPO gain with *p*-values, accuracy vs. size/GFLOPs, latency vs. FPS, latency distribution (median/P95), VRAM/RAM, accuracy–latency trade-off, LaTeX tables; standard figures A–C (identical in the three repositories): accuracy vs. latency/FPS/parameters, training and inference time with the real-time criterion, boundary metrics. |
-| `analysis/results_analysis.ipynb` + `analysis/article_aggregator.py` | Cross-architecture tables (LaTeX), paired tests (Wilcoxon, Holm, Friedman) and figures over YOLO26, U-Net and SAM 3 — byte-identical copies in the three repositories; place them in the folder holding the three repositories (see `analysis/README.md`). |
+| `analysis/results_analysis.ipynb` + `analysis/results_aggregator.py` | Cross-architecture tables (LaTeX), paired tests (Wilcoxon, Holm, Friedman) and figures over YOLO26, U-Net and SAM 3 — byte-identical copies in the three repositories; place them in the folder holding the three repositories (see `analysis/README.md`). |
 
 They read only the files written by the pipeline (no GPU needed). The pipeline folder is found automatically
 (`$PIPELINE_DIR`, else `/workspace/logs/<name>`, else `logs/<name>`); figures go to `<pipeline>/figures/`
