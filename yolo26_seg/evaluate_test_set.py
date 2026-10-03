@@ -10,8 +10,9 @@ split of ``data.yaml`` — the only phase that ever touches it:
 2. **Pixel metrics** — DSC, JSI, ISIC thresholded JSI, sensitivity,
    specificity, accuracy and the boundary metrics Boundary IoU, NSD and HD95
    per image (:mod:`segmentation_metrics`), with the
-   prediction taken as the union of instances with ``conf >= --conf``
-   (default 0.25, the Ultralytics predict default) at the original image
+   prediction taken as the single highest-confidence instance among those
+   with ``conf >= --conf`` (default 0.001; ISIC 2018 Task 1 has one lesion per
+   image, so lower-ranked instances are never merged) at the original image
    resolution. Empty predictions are scored as 0 (never skipped).
 
 FP32 is the primary result (the models were trained in FP32); the FP16 run
@@ -58,13 +59,13 @@ from common import (
     sha256_file,
     utc_now_iso,
 )
-from segmentation_metrics import aggregate_scores, evaluate_images
+from segmentation_metrics import PIXEL_CONF, aggregate_scores, evaluate_images
 from train_all_models_cv import collect_test_images, load_data_yaml
 from training import METRIC_KEYS, RUN_STATE_FILE
 
 #: Version of the evaluation method. Part of the cache key: bump it whenever the
 #: metric definitions or the evaluation protocol change.
-EVAL_VERSION: int = 3   # 2: + boundary metrics (BIoU, NSD); 3: + HD95
+EVAL_VERSION: int = 4   # 2: + boundary metrics (BIoU, NSD); 3: + HD95; 4: top-1 mask at conf 0.001 (was union at 0.25)
 
 VARIANTS: tuple[str, ...] = ("baseline", "optimized")
 PRECISIONS: tuple[str, ...] = ("fp32", "fp16")
@@ -84,8 +85,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="0", help="Single GPU id (default: 0) or 'cpu'.")
     p.add_argument("--project", default=DEFAULT_PIPELINE_ROOT, help="Pipeline root.")
     p.add_argument(
-        "--conf", type=float, default=0.25,
-        help="Confidence threshold of the instances merged into the pixel mask (default: 0.25).",
+        "--conf", type=float, default=PIXEL_CONF,
+        help=f"Confidence threshold of the candidate instances; the top-1 is scored (default: {PIXEL_CONF}).",
     )
     p.add_argument("--no-save-masks", action="store_true", help="Do not save predicted masks.")
     p.add_argument("--force", action="store_true", help="Re-evaluate even if results are up to date.")

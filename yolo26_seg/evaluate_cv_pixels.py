@@ -3,7 +3,7 @@
 Phase 2 trains ``k`` models per variant; Ultralytics only reports instance
 metrics (mAP/P/R) for them. This script scores each fold's ``best.pt`` on that
 fold's validation images with the same pixel metrics as Phase 5
-(:mod:`segmentation_metrics`, FP32, ``conf=0.25``), so DSC/JSI are reported for
+(:mod:`segmentation_metrics`, FP32, top-1 instance at ``conf=0.001``), so DSC/JSI are reported for
 every phase. The test set is never used here.
 
 Outputs (per model)::
@@ -41,7 +41,7 @@ from common import (
     sha256_file,
     utc_now_iso,
 )
-from segmentation_metrics import SCORE_KEYS, aggregate_scores, evaluate_images
+from segmentation_metrics import PIXEL_CONF, SCORE_KEYS, aggregate_scores, evaluate_images
 from evaluate_test_set import EVAL_VERSION
 from training import RUN_STATE_FILE
 
@@ -53,7 +53,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--protocol", choices=["baseline", "optimized"], default="baseline")
     p.add_argument("--device", default="0", help="Single GPU id (default: 0) or 'cpu'.")
     p.add_argument("--project", default=DEFAULT_PIPELINE_ROOT, help="Pipeline root.")
-    p.add_argument("--conf", type=float, default=0.25, help="Mask confidence threshold (default: 0.25).")
+    p.add_argument("--conf", type=float, default=PIXEL_CONF,
+                   help=f"Confidence threshold of the candidate instances; the top-1 is scored (default: {PIXEL_CONF}).")
     p.add_argument("--force", action="store_true", help="Re-evaluate even if up to date.")
     return p.parse_args()
 

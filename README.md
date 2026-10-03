@@ -239,7 +239,8 @@ re-run to resume) · any other value is the exit code of the failing step (its l
 
 * Instance metrics from `model.val(split="test", batch=1)` (P, R, mAP50, mAP50-95, F1; Box and Mask).
 * Pixel metrics per image: ground truth = the official ISIC mask (`masks/<id>.png`, Phase 0) at dataset resolution;
-  prediction = union of instance masks with `conf ≥ 0.25` at full resolution (`retina_masks=True`).
+  prediction = the top-1 (highest-confidence) instance mask among those with `conf ≥ 0.001`, at full resolution
+  (`retina_masks=True`); one lesion per image, so lower-ranked instances are never merged.
   `DSC = 2TP/(2TP+FP+FN)`, `JSI = TP/(TP+FP+FN)`, ISIC thresholded JSI (`JSI < 0.65 → 0`), sensitivity,
   specificity, accuracy. **An empty prediction scores 0** (never skipped); empty GT and empty prediction scores 1.
 * Boundary metrics (Metrics Reloaded): Boundary IoU (band 2 % of the image diagonal), NSD (tolerance 1 %) and
@@ -252,7 +253,7 @@ re-run to resume) · any other value is the exit code of the failing step (its l
 
 * **Forward latency**: fused network on a fixed 1×3×640×640 input, timed with `torch.cuda.Event` + synchronise
   per iteration (50 warm-up + 500 timed). **End-to-end latency**: the deployed pipeline on a real test image —
-  `YOLO.predict()` with the Phase 5a settings (`conf` 0.25, `retina_masks=True`) and the union mask copied to the
+  `YOLO.predict()` with the Phase 5a settings (`conf` 0.001, `retina_masks=True`) and the top-1 mask copied to the
   host, i.e. exactly the mask that is scored (as for the U-Net and SAM 3) — timed with `perf_counter` (20 + 200).
 * Reported: mean, SD, median, **P90/P95/P99**, min/max, **FPS** = 1000 / mean (and 1000 / median).
 * **Driver-level VRAM**: `vram_process_peak_mb` = device memory held by the benchmark process at the end of the

@@ -496,7 +496,9 @@ weeks on one GPU (Phases 2 and 3 are independent and can run in parallel on two 
   epoch number, and gaps in the log are reported.
 * **Two confidence thresholds:** instance metrics (P, R, mAP50, mAP50-95, F1 = 2PR/(P + R), box and mask) use the
   validator on the test split with batch 1 and its mAP defaults (`conf = 0.001`, NMS IoU 0.7); the pixel masks (DSC, JSI,
-  boundary metrics) use the union of instances with `conf ≥ 0.25` (the predict default). Only YOLO26 reports instance
+  boundary metrics) use the **top-1 (highest-confidence) instance among those with `conf ≥ 0.001`**
+  (`segmentation_metrics.PIXEL_CONF`, `predicted_top1_mask`). Due to the single-lesion nature of ISIC 2018 Task 1, YOLO26 pixel evaluation utilizes a top-1 confidence selection at conf=0.001. This maximizes lesion recall while strictly preventing the merging of low-confidence background artifacts. (Until 2026-10-03 the
+  pixel mask was the union of instances with `conf ≥ 0.25`; see § 14.4.) Only YOLO26 reports instance
   metrics; they are `NaN` for the other arms (SAM 3's validation/CV tables carry its official COCO mAP50-95 instead).
 * **Checkpoint on disk is FP16** (Ultralytics `strip_optimizer`), whereas the U-Net and SAM 3 store FP32 — compare the
   theoretical FP32/FP16 weight sizes (fused parameters × 4 / × 2 bytes), not file sizes.
@@ -668,8 +670,8 @@ $$
 | **HD95** | max of the two directed 95th percentiles of contour-to-contour distances, **pixels** at dataset resolution (lower is better; image sizes vary, so report the median next to the mean — the diagonal penalty of a missed lesion dominates the mean) | MONAI / DeepMind `surface-distance` convention; added in this audit |
 
 * **Ground truth** = the official mask (`masks/<id>.png`; for SAM 3 its lossless RLE). **Prediction**: YOLO26 — each
-  test image alone (batch 1), `conf = 0.25`, instance masks at the original resolution (`retina_masks=True`), binarised
-  at 0.5 and merged (union); U-Net — bilinear upsampling of the probability map, threshold 0.5; SAM 3 — § 6.3.
+  test image alone (batch 1), `conf = 0.001`, instance masks at the original resolution (`retina_masks=True`), binarised
+  at 0.5, **top-1 instance only** (never merged — one lesion per image); U-Net — bilinear upsampling of the probability map, threshold 0.5; SAM 3 — § 6.3.
 * **Empty masks:** an empty prediction with a non-empty ground truth (or vice versa) scores DSC = JSI = 0 (boundary scores 0,
   HD95 = image diagonal) and is **included** in all averages — missed lesions count as complete failures (Metrics Reloaded:
   penalise, never drop). If both were empty: overlap and boundary scores 1, HD95 0; sensitivity is then undefined and
@@ -930,7 +932,8 @@ sizes are distinguished by direct labels (n, s, m, l, x).
   (verified bit-identical). Evaluation cache version `EVAL_VERSION = 3` in the three repositories.
 * `benchmark_efficiency.py`: driver-level **process VRAM** (CUDA context included) and the **`end_to_end_dataset`**
   scope (100 distinct test images, same images in every repository) in all three; YOLO26's `end_to_end` now ends at
-  the same artefact as the other arms (full-resolution union mask on the host, `retina_masks=True`, `conf=0.25`).
+  the same artefact as the other arms (full-resolution union mask on the host, `retina_masks=True`, `conf=0.25`;
+  superseded by § 14.4: top-1 mask, `conf=0.001`).
   `BENCHMARK_VERSION` 3 (YOLO26, U-Net) / 2 (SAM 3).
 * `build_final_report.py`: HD95 in the accuracy and HPO-gain tables (direction-aware improvement counts); new
   efficiency columns (`e2e_dataset_*`, `vram_process_peak_mb`, `vram_cuda_context_mb`, `gflops_640`, `input_px`).
@@ -938,6 +941,22 @@ sizes are distinguished by direct labels (n, s, m, l, x).
   readable log axes, corrected stale notes); root notebook + aggregator added (`analysis/` in each repository).
 * This document: cross-checked against the three per-arm notes (2026-10-02); their missing details merged, superseded
   statements listed in Appendix A.
+
+### 14.4 YOLO26 pixel-mask rule changed to top-1 at conf 0.001 (2026-10-03)
+
+* **Change:** `segmentation_metrics.evaluate_images` now scores `predicted_top1_mask` (the single highest-confidence
+  instance) instead of `predicted_union_mask`, and the pixel `--conf` default of `evaluate_cv_pixels.py`,
+  `evaluate_test_set.py` and `benchmark_efficiency.py` is `PIXEL_CONF = 0.001` (was 0.25). `EVAL_VERSION` 3 → 4 and
+  YOLO26 `BENCHMARK_VERSION` 3 → 4, so no cached union-rule result is reused. Due to the single-lesion nature of ISIC 2018 Task 1, YOLO26 pixel evaluation utilizes a top-1 confidence selection at conf=0.001. This maximizes lesion recall while strictly preventing the merging of low-confidence background artifacts.
+* **Why:** CPU diagnostic of the five Phase 1 `best.pt` on the 100-image validation split
+  (`logs/pipeline_final_v1/phase1_pixel_eval_cpu/`). Union at 0.25: 3–7 empty masks per size, JSI 0.774–0.786.
+  Union at 0.001: no empty masks, but background instances merged into the mask (specificity 0.81–0.89), JSI
+  0.706–0.799. Top-1 at 0.001: no empty masks, JSI 0.793–0.817 (nano 0.817 / DSC 0.891).
+* **Disclosure:** the rule was chosen after seeing these validation results, but **before** any Phase 2 pixel-level
+  or Phase 5 test-set evaluation. Confirm on the CV folds before reporting. `segmentation_metrics.py` is therefore no
+  longer byte-identical across the three repositories (YOLO26 only: `PIXEL_CONF`, `predicted_top1_mask`); the
+  U-Net (dense, no instances) is unaffected. SAM 3 still scores the union of masks with score ≥ 0.5 — decide whether
+  to align it to top-1 before its Phase 2 pixel / Phase 5 evaluation.
 
 ---
 
