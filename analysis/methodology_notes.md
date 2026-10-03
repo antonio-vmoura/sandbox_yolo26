@@ -405,7 +405,7 @@ to an uninterrupted one.
 | Budget | **30 epochs**, patience 30 (no early stopping) | one FP32 epoch ≈ 1.8 h; 120 epochs would take > 8 days per run and the HPO several months |
 | HPO | **10 trials × 10 epochs**, Optuna TPE (Optuna 5.0.0, SQLite), **5** start-up trials, seeded per proposal (same formula as the U-Net) | compute; a foundation model starts from strong weights |
 | Selection | `best.pt` = best validation per-image JSI (strict improvement, ties earliest), the shared metric code | as the U-Net |
-| Prediction rule | union of the instances with score ≥ 0.5 (score = sigmoid(logit) × presence; top 100 instances per image as in the official prediction dump) | SAM 3 default threshold |
+| Prediction rule | **top-1** (highest-score) instance among those with score ≥ 0.5 for Phase 5 and the end-to-end benchmark; the training-time validation JSI that selects `best.pt` (Phases 1–4, including the Phase 2 CV folds) keeps the union rule, so all folds of a phase are selected identically (§ 14.4) (score = sigmoid(logit) × presence; top 100 instances per image as in the official prediction dump) | SAM 3 default threshold |
 
 **Default (official recipe) hyperparameters.** `lr_scale` 0.1, which scales the recipe's base learning rates
 8 × 10⁻⁴ (detector transformer), 2.5 × 10⁻⁴ (vision backbone) and 5 × 10⁻⁵ (text encoder) to the **effective defaults
@@ -602,7 +602,9 @@ weeks on one GPU (Phases 2 and 3 are independent and can run in parallel on two 
   (official transforms and post-processor) and applies it to the test split; applied to the validation images it
   reproduces the trainer's own validation JSI to the last digit (0.6277150682843381 in both, in the preliminary check) —
   the test metric is the same function of the model as the selection metric. SAM 3 is an **instance/concept model
-  evaluated as a semantic segmenter** (union of instances with score ≥ 0.5) — state it.
+  evaluated as a semantic segmenter** (top-1 instance with score ≥ 0.5 at test time; union during model selection —
+  § 14.4) — state it. Since `EVAL_VERSION` 4 the test metric uses top-1, so the "same function as the selection
+  metric" identity above holds for the union rule only; the two rules differ by ≤ 0.003 JSI on the checked splits.
 * **Parameters by component:** vision backbone 454.0 M, text encoder 353.7 M, detector transformer 21.0 M, geometry
   encoder 8.2 M, segmentation head 2.3 M, scoring 1.2 M; without the text encoder 486.8 M. With a fixed prompt the text
   features can be cached: `forward_cached_text` measures that deployment form.
@@ -919,7 +921,8 @@ sizes are distinguished by direct labels (n, s, m, l, x).
 11. **Deliberate differences from the original Keras training** (binary mask augmentation, per-epoch reshuffle, BCE
     from logits).
 12. **Reduced SAM 3 budget; FP16 = autocast for SAM 3; GFLOPs counters differ** (state in the efficiency table).
-13. **SAM 3 evaluated as a semantic segmenter** — prompt "skin lesion", union of instances with score ≥ 0.5.
+13. **SAM 3 evaluated as a semantic segmenter** — prompt "skin lesion", top-1 instance with score ≥ 0.5 at test time
+    (union of instances with score ≥ 0.5 for checkpoint selection; § 14.4).
 14. **Reproducibility statement per arm** (§ 10, § 12) — never claim bit-exactness for SAM 3 or YOLO26.
 15. **Multiple comparisons** — Holm for joint claims across models (automatic in the cross-architecture tables; to be
     applied by hand to the per-model HPO p-values if they are claimed jointly).
@@ -955,8 +958,16 @@ sizes are distinguished by direct labels (n, s, m, l, x).
 * **Disclosure:** the rule was chosen after seeing these validation results, but **before** any Phase 2 pixel-level
   or Phase 5 test-set evaluation. Confirm on the CV folds before reporting. `segmentation_metrics.py` is therefore no
   longer byte-identical across the three repositories (YOLO26 only: `PIXEL_CONF`, `predicted_top1_mask`); the
-  U-Net (dense, no instances) is unaffected. SAM 3 still scores the union of masks with score ≥ 0.5 — decide whether
-  to align it to top-1 before its Phase 2 pixel / Phase 5 evaluation.
+  U-Net (dense, no instances) is unaffected.
+* **SAM 3 aligned (2026-10-03):** `inference.evaluate_annotations` (Phase 5) and the `end_to_end` benchmark now keep
+  the **top-1 instance among those with score ≥ 0.5** (SAM 3's own threshold is unchanged). `EVAL_VERSION` 3 → 4 and
+  SAM 3 `BENCHMARK_VERSION` 2 → 3. **Not changed:** `protocol_trainer.pixel_metrics_from_dump`, the training-time
+  validation JSI that selects `best.pt` and that provides SAM 3's Phase 2 CV metrics, because the Phase 2 CV was
+  running when the rule was adopted and changing it would have selected fold 0 and folds 1–4 under different rules.
+  Measured impact (CPU, from the saved prediction dumps): Phase 1 validation (n = 100; 3 images with > 1 instance)
+  union JSI 0.8553 = top-1 0.8553; Phase 2 fold 0 (n = 539; 23 images with > 1 instance) union 0.8415 vs top-1
+  0.8439 (+0.0024). The asymmetry is therefore negligible but must be disclosed: SAM 3's CV row uses union,
+  its test row top-1.
 
 ---
 
