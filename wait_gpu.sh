@@ -64,8 +64,34 @@ while true; do
 done
 echo "GPU free — launching the YOLO26 pipeline."
 
+# GPU injection. CDI (``--device nvidia.com/gpu=N``) is preferred: with the
+# legacy ``--gpus`` hook on a systemd/cgroup-v2 host, a ``systemctl
+# daemon-reload`` (e.g. from unattended-upgrades) silently revokes the
+# container's access to /dev/nvidia* — running processes keep working, but
+# every NEW CUDA process fails with "Can't initialize NVML" (this is what
+# aborted pipeline_final_v1 at phase2_pixels). CDI needs the spec
+# (sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml) and, on
+# Docker < 28.3, ``"features": {"cdi": true}`` in /etc/docker/daemon.json.
+# Without CDI we fall back to --gpus with a warning; REQUIRE_CDI=1 aborts.
+REQUIRE_CDI="${REQUIRE_CDI:-0}"
+CDI_DIRS=$(docker info --format '{{json .CDISpecDirs}}' 2>/dev/null)
+if [[ -n "${CDI_DIRS}" && "${CDI_DIRS}" != "[]" && "${CDI_DIRS}" != "null" ]] \
+    && nvidia-ctk cdi list 2>/dev/null | grep -qx "nvidia.com/gpu=${GPU_DEVICE}"; then
+    GPU_ARGS=(--device "nvidia.com/gpu=${GPU_DEVICE}")
+    echo "GPU injection: CDI (nvidia.com/gpu=${GPU_DEVICE})."
+else
+    echo "WARNING: CDI unavailable (Docker CDI disabled or no nvidia.com/gpu=${GPU_DEVICE} spec)." >&2
+    echo "         A host 'systemctl daemon-reload' may cut this container off the GPU mid-run." >&2
+    if [[ "${REQUIRE_CDI}" -eq 1 ]]; then
+        echo "REQUIRE_CDI=1 — aborting." >&2
+        exit 1
+    fi
+    GPU_ARGS=(--gpus "\"device=${GPU_DEVICE}\"")
+    echo "GPU injection: legacy --gpus device=${GPU_DEVICE}."
+fi
+
 mkdir -p "logs/${PIPELINE_NAME}"
-docker run --gpus "\"device=${GPU_DEVICE}\"" --rm --ipc=host \
+docker run "${GPU_ARGS[@]}" --rm --ipc=host \
   --user "$(id -u):$(id -g)" \
   -e TORCH_HOME=/workspace/cache/torch -e HOME=/workspace/cache \
   -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \

@@ -83,6 +83,10 @@ HPO_BATCH="${HPO_BATCH:-}"
 # the first attempt, and the wait (seconds) between attempts.
 HPO_MAX_RETRIES="${HPO_MAX_RETRIES:-5}"
 HPO_RETRY_WAIT="${HPO_RETRY_WAIT:-600}"
+# Same retry policy for every other GPU step (training, pixel evaluation,
+# Phase 5): a step that fails while the GPU is unhealthy is retried.
+GPU_STEP_MAX_RETRIES="${GPU_STEP_MAX_RETRIES:-${HPO_MAX_RETRIES}}"
+GPU_STEP_RETRY_WAIT="${GPU_STEP_RETRY_WAIT:-${HPO_RETRY_WAIT}}"
 
 # Phase 5 (test set)
 EVAL_PRECISIONS="${EVAL_PRECISIONS:-fp32 fp16}"
@@ -131,9 +135,11 @@ Environment variables (override defaults):
   DATA_YAML, LOGS_ROOT, PIPELINE_NAME, PROJECT, GPU_DEVICE_IDS, BENCH_DEVICE,
   TRAIN_EPOCHS, TRAIN_PATIENCE, CV_K_FOLDS, CV_SEED,
   HPO_SPACE, HPO_ITERATIONS, HPO_EPOCHS_PER_TRIAL, HPO_PATIENCE, HPO_BATCH,
-  HPO_MAX_RETRIES, HPO_RETRY_WAIT, EVAL_PRECISIONS
+  HPO_MAX_RETRIES, HPO_RETRY_WAIT, GPU_STEP_MAX_RETRIES, GPU_STEP_RETRY_WAIT,
+  EVAL_PRECISIONS
 
-Exit codes: 0 success; 75 HPO gave up after HPO_MAX_RETRIES GPU failures;
+Exit codes: 0 success; 75 HPO (or another GPU step) gave up after its
+            retries because the GPU stayed unavailable;
             anything else = exit code of the failing step.
 EOF
 }
@@ -275,6 +281,41 @@ run_or_die() {
     fi
 }
 
+# Run a GPU step with a sanity check before every attempt. If the step fails
+# and the GPU is then unhealthy (e.g. "Can't initialize NVML" after a host
+# daemon-reload), wait GPU_STEP_RETRY_WAIT s and retry, up to
+# GPU_STEP_MAX_RETRIES times; the steps are idempotent, so a retry resumes
+# (training from last.pt, evaluations skip finished models). A failure with a
+# healthy GPU is a real error and aborts at once. --force is dropped after the
+# first attempt so that retries resume instead of starting over.
+run_gpu_step() {
+    local tag="$1"; shift
+    local -a cmd=("$@") next
+    local max_attempts=$((GPU_STEP_MAX_RETRIES + 1)) attempt rc a
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+        rc=0
+        if ! gpu_sanity_check "${tag}#${attempt}"; then
+            rc=${EXIT_GPU_UNAVAILABLE}
+        else
+            run_cmd "${tag}" "${cmd[@]}" || rc=$?
+            [[ ${rc} -eq 0 ]] && return 0
+            if gpu_sanity_check "${tag}#${attempt}-post-failure"; then
+                log "Pipeline aborted at step '${tag}' (exit ${rc}; GPU healthy, so not a GPU failure). Fix the cause and re-run the same command to resume."
+                exit "${rc}"
+            fi
+        fi
+        next=()
+        for a in "${cmd[@]}"; do [[ "${a}" == "--force" ]] || next+=("${a}"); done
+        cmd=("${next[@]}")
+        if [[ ${attempt} -ge ${max_attempts} ]]; then
+            log "[erro] ${tag}: GPU indisponível após ${max_attempts} tentativa(s). Recupere o driver / reinicie o container e re-execute o mesmo comando para retomar."
+            exit "${EXIT_GPU_UNAVAILABLE}"
+        fi
+        log "    [${tag}] GPU indisponível (exit ${rc}) — tentativa ${attempt}/${max_attempts}; nova tentativa em ${GPU_STEP_RETRY_WAIT}s."
+        [[ "${DRY_RUN}" -eq 1 ]] || sleep "${GPU_STEP_RETRY_WAIT}"
+    done
+}
+
 has_phase() {
     local needle="$1"
     for p in "${PHASES[@]}"; do
@@ -304,6 +345,7 @@ log "  phases         = ${PHASES[*]}"
 log "  train budget   = ${TRAIN_EPOCHS:-120 (default)} epochs, patience ${TRAIN_PATIENCE:-120 (default)}  [Phases 1, 2, 4]"
 log "  cv             = k=${CV_K_FOLDS}, seed=${CV_SEED}"
 log "  hpo            = space=${HPO_SPACE}, trials=${HPO_ITERATIONS}, ep/trial=${HPO_EPOCHS_PER_TRIAL}, batch=${HPO_BATCH:-per-model (16; xlarge 8)}, retries=${HPO_MAX_RETRIES} x ${HPO_RETRY_WAIT}s"
+log "  gpu retries    = ${GPU_STEP_MAX_RETRIES} x ${GPU_STEP_RETRY_WAIT}s  [Phases 1, 2, 4, 5 GPU steps]"
 log "  precisions     = ${EVAL_PRECISIONS}  [Phase 5 efficiency]"
 log "  force          = ${FORCE_FLAG:-<off>}"
 log "  yolo_seg_dir   = ${YOLO_SEG_DIR}"
@@ -325,8 +367,7 @@ fi
 if has_phase 1; then
     log ""
     log "### Phase 1 — Baseline training (base setup + Ultralytics default HPs)"
-    gpu_sanity_check phase1 || exit $?
-    run_or_die phase1 python "${YOLO_SEG_DIR}/train_baseline_models.py" \
+    run_gpu_step phase1 python "${YOLO_SEG_DIR}/train_baseline_models.py" \
         --models "${MODELS[@]}" \
         --data "${DATA_YAML}" \
         --device "${GPU_DEVICE_IDS}" \
@@ -340,8 +381,7 @@ fi
 if has_phase 2; then
     log ""
     log "### Phase 2 — Baseline ${CV_K_FOLDS}-fold CV on train+val (seed=${CV_SEED}; test isolated)"
-    gpu_sanity_check phase2 || exit $?
-    run_or_die phase2 python "${YOLO_SEG_DIR}/train_all_models_cv.py" \
+    run_gpu_step phase2 python "${YOLO_SEG_DIR}/train_all_models_cv.py" \
         --protocol baseline \
         --models "${MODELS[@]}" \
         --data "${DATA_YAML}" \
@@ -353,7 +393,7 @@ if has_phase 2; then
     run_or_die phase2_consolidate python "${YOLO_SEG_DIR}/consolidate_cv_results.py" \
         --protocol baseline --models "${MODELS[@]}" --project "${PROJECT}"
     log "### Phase 2 — Pixel-level DSC/JSI of each fold on its held-out fold (device ${BENCH_DEVICE})"
-    run_or_die phase2_pixels python "${YOLO_SEG_DIR}/evaluate_cv_pixels.py" \
+    run_gpu_step phase2_pixels python "${YOLO_SEG_DIR}/evaluate_cv_pixels.py" \
         --protocol baseline \
         --models "${MODELS[@]}" \
         --device "${BENCH_DEVICE}" \
@@ -414,8 +454,7 @@ fi
 if has_phase 4; then
     log ""
     log "### Phase 4 — Optimised fine-tuning with the Phase 3 hyperparameters"
-    gpu_sanity_check phase4 || exit $?
-    run_or_die phase4 python "${YOLO_SEG_DIR}/train_all_models.py" \
+    run_gpu_step phase4 python "${YOLO_SEG_DIR}/train_all_models.py" \
         --models "${MODELS[@]}" \
         --data "${DATA_YAML}" \
         --device "${GPU_DEVICE_IDS}" \
@@ -439,9 +478,8 @@ if has_phase 5; then
         require_complete_run "${PROJECT}/phase1_baseline/yolo26_${m}_baseline" "Baseline ${m}"
         require_complete_run "${PROJECT}/phase4_optimized/yolo26_${m}_optimized" "Optimised ${m}"
     done
-    gpu_sanity_check phase5 || exit $?
     read -r -a PRECISIONS <<<"${EVAL_PRECISIONS}"
-    run_or_die phase5_accuracy python "${YOLO_SEG_DIR}/evaluate_test_set.py" \
+    run_gpu_step phase5_accuracy python "${YOLO_SEG_DIR}/evaluate_test_set.py" \
         --models "${MODELS[@]}" \
         --variants baseline optimized \
         --precisions "${PRECISIONS[@]}" \
@@ -449,7 +487,7 @@ if has_phase 5; then
         --device "${BENCH_DEVICE}" \
         --project "${PROJECT}" \
         "${FORCE_ARGS[@]}"
-    run_or_die phase5_efficiency python "${YOLO_SEG_DIR}/benchmark_efficiency.py" \
+    run_gpu_step phase5_efficiency python "${YOLO_SEG_DIR}/benchmark_efficiency.py" \
         --models "${MODELS[@]}" \
         --variants baseline optimized \
         --precisions "${PRECISIONS[@]}" \

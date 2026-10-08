@@ -12,7 +12,7 @@ measures, on a **single GPU** with **batch = 1**:
     primary "model latency" figure.
   - ``end_to_end``: the deployed prediction pipeline on a real test image
     (decoded, in host memory): ``YOLO.predict()`` with the Phase 5a settings
-    (``conf`` 0.25, ``retina_masks=True``: pre-processing, inference, NMS, mask
+    (``conf`` 0.001, top-1 mask, ``retina_masks=True``: pre-processing, inference, NMS, mask
     up-sampling to the image resolution) followed by the union of the instance
     masks copied to the host — i.e. exactly the binary mask that Phase 5a
     scores, as for the U-Net and SAM 3. Timed with ``time.perf_counter``
@@ -99,6 +99,7 @@ from common import (
     sha256_file,
     utc_now_iso,
 )
+from segmentation_metrics import PIXEL_CONF
 
 VARIANTS: tuple[str, ...] = ("baseline", "optimized")
 PRECISIONS: tuple[str, ...] = ("fp32", "fp16")
@@ -107,7 +108,8 @@ PRECISIONS: tuple[str, ...] = ("fp32", "fp16")
 #: what or how this script measures changes, so stale results are recomputed.
 #: 3: end_to_end = final full-resolution mask on the host (retina_masks, conf);
 #:    + end_to_end_dataset scope; + driver-level process VRAM.
-BENCHMARK_VERSION: int = 3
+#: 4: end_to_end mask = top-1 instance at conf 0.001 (was union at conf 0.25).
+BENCHMARK_VERSION: int = 4
 
 #: GPU utilisation (%) above which a run is flagged as contended.
 CONTENTION_UTIL_PCT: int = 5
@@ -175,7 +177,7 @@ def run_worker(args: argparse.Namespace) -> dict[str, Any]:
     from ultralytics import YOLO
     from ultralytics.utils.torch_utils import get_flops
 
-    from segmentation_metrics import predicted_union_mask
+    from segmentation_metrics import predicted_top1_mask
 
     torch.manual_seed(SEED)
     cuda = args.device != "cpu"
@@ -260,7 +262,7 @@ def run_worker(args: argparse.Namespace) -> dict[str, Any]:
     def predict(bgr):
         """Binary lesion mask at the image resolution, on the host (as scored in Phase 5a)."""
         result = predictor.predict(bgr, **kw)[0]
-        return predicted_union_mask(result, *result.orig_shape)
+        return predicted_top1_mask(result, *result.orig_shape)
 
     def timed(bgr) -> float:
         if cuda:
@@ -468,8 +470,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--e2e-iters", type=int, default=200, help="Timed predict() calls (default: 200).")
     p.add_argument("--e2e-images", type=int, default=100,
                    help="Distinct test images timed once each in the end_to_end_dataset scope (default: 100; 0 = off).")
-    p.add_argument("--conf", type=float, default=0.25,
-                   help="Confidence threshold of the instances merged into the mask (default: 0.25, as Phase 5a).")
+    p.add_argument("--conf", type=float, default=PIXEL_CONF,
+                   help=f"Confidence threshold of the candidate instances; top-1 mask (default: {PIXEL_CONF}, as Phase 5a).")
     p.add_argument("--no-cudnn-benchmark", dest="cudnn_benchmark", action="store_false",
                    help="Disable cuDNN autotuning (default: enabled, as in deployment).")
     p.add_argument("--force", action="store_true", help="Re-run even if results are up to date.")
