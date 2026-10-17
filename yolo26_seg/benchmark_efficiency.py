@@ -53,9 +53,10 @@ Isolation & fairness:
   memory, allocator caches and cuDNN autotuning never leak between models.
 * ``cudnn.benchmark=True`` (fixed input shape, as in deployment); recorded in
   the output. Warm-up iterations are discarded.
-* GPU utilisation and memory used by *other* processes are recorded before
-  each run; a busy GPU is flagged ``contended`` (latencies are then not
-  publication-grade — re-run on an idle GPU).
+* GPU memory, utilisation and clocks are recorded before and after each run;
+  a GPU on which *other* processes hold memory is flagged ``contended``
+  (``CONTENTION_MEM_MIB``; latencies are then not publication-grade — re-run
+  on an idle GPU).
 
 Outputs::
 
@@ -111,8 +112,13 @@ PRECISIONS: tuple[str, ...] = ("fp32", "fp16")
 #: 4: end_to_end mask = top-1 instance at conf 0.001 (was union at conf 0.25).
 BENCHMARK_VERSION: int = 4
 
-#: GPU utilisation (%) above which a run is flagged as contended.
-CONTENTION_UTIL_PCT: int = 5
+#: Memory (MiB) used on the benchmark GPU by *other* processes above which a run is flagged as contended.
+#: The parent never creates a CUDA context and both snapshots are taken while no worker is alive (before it
+#: starts, after it has exited), so ``memory.used`` there is exactly what other processes hold — and any CUDA
+#: process holds at least its context (a few hundred MiB). Utilisation is recorded but not used: nvidia-smi
+#: averages it over its last sampling window, so for about a second after a worker exits it still shows that
+#: worker's own load (the earlier rule, utilisation > 5 %, flagged idle-GPU runs for this reason).
+CONTENTION_MEM_MIB: int = 100
 
 MB: float = 1024 ** 2
 
@@ -301,7 +307,7 @@ def run_worker(args: argparse.Namespace) -> dict[str, Any]:
         "forward": {**latency_stats(fwd_ms), "timer": "torch.cuda.Event" if cuda else "perf_counter",
                     "input_shape": [1, 3, IMGSZ, IMGSZ], "raw_ms": fwd_ms},
         "end_to_end": {**latency_stats(e2e_ms), "timer": "perf_counter+synchronize",
-                       "pipeline": "YOLO.predict(conf, retina_masks=True) + union mask to host",
+                       "pipeline": "YOLO.predict(conf, retina_masks=True) + top-1 instance mask to host",
                        "sample_image": args.sample_image, "raw_ms": e2e_ms},
         "end_to_end_dataset": {
             **latency_stats(ds_ms), "timer": "perf_counter+synchronize",
@@ -356,7 +362,7 @@ def run_worker(args: argparse.Namespace) -> dict[str, Any]:
 # Parent orchestration
 # ----------------------------------------------------------------------------
 def gpu_snapshot(device: str) -> dict[str, Any]:
-    """Utilisation / memory of the benchmark GPU right before a run (via nvidia-smi)."""
+    """Utilisation / memory / clocks of the benchmark GPU while no worker is alive (via nvidia-smi)."""
     if device == "cpu":
         return {}
     try:
@@ -376,7 +382,7 @@ def gpu_snapshot(device: str) -> dict[str, Any]:
             snap[k] = float(snap[k])
         except (KeyError, ValueError):
             pass
-    snap["contended"] = isinstance(snap.get("util_pct"), float) and snap["util_pct"] > CONTENTION_UTIL_PCT
+    snap["contended"] = isinstance(snap.get("mem_used_mb"), float) and snap["mem_used_mb"] > CONTENTION_MEM_MIB
     return snap
 
 
@@ -403,8 +409,8 @@ def benchmark_one(
 
     before = gpu_snapshot(args.device)
     if before.get("contended"):
-        print(f"  [warn] GPU {args.device} is busy ({before['util_pct']:.0f}% util, "
-              f"{before['mem_used_mb']:.0f} MB used) — latencies will be flagged as contended")
+        print(f"  [warn] GPU {args.device} is busy ({before['mem_used_mb']:.0f} MB used by other processes, "
+              f"{before['util_pct']:.0f}% util) — latencies will be flagged as contended")
     with tempfile.TemporaryDirectory() as tmp:
         tmp_json = Path(tmp) / "result.json"
         image_list = Path(tmp) / "e2e_images.json"
