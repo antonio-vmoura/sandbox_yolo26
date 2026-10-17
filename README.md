@@ -267,8 +267,8 @@ re-run to resume) · any other value is the exit code of the failing step (its l
   **RAM**: RSS after loading/benchmarking and peak RSS.
 * **Size**: `best.pt` on disk (stored in **FP16** by Ultralytics), theoretical FP32/FP16 sizes (fused params × 4/2 B),
   parameter count (fused and unfused), GFLOPs at 640.
-* GPU utilisation is sampled before/after each run; a busy GPU marks the result `contended` (re-run on an idle GPU
-  before quoting those latencies). Baseline and Optimised share the architecture, so their efficiency should match.
+* GPU memory, utilisation and SM clock are sampled before/after each run; another process holding > 100 MiB on the
+  GPU marks the result `contended` (re-run on an idle GPU before quoting those latencies). Baseline and Optimised share the architecture, so their efficiency should match.
 
 ### Notes on AMP and batch size
 
