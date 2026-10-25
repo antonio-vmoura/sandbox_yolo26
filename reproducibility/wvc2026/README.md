@@ -12,10 +12,10 @@ Five YOLO26-seg scales (`nano`, `small`, `medium`, `large`, `xlarge`) on the off
 
 | Folder | Pipeline stage (paper section) | Files |
 |---|---|---|
-| `baseline/<scale>/` | Baseline configuration and default training (III-A) | `results.csv`, `results.png` (training and validation curves), `args.yaml` |
-| `hpo/<scale>/` | Domain-specific hyperparameter optimization (III-B) | `best_hyperparameters.yaml`, `tune_results.csv`, `tune_fitness.png` |
-| `optimized/<scale>/` | Optimized fine-tuning protocol (III-C) | `results.csv`, `results.png`, `args.yaml` |
-| `cv/<scale>/` | 5-fold cross-validation (III-D) | `metrics_per_fold.csv`, `metrics_summary.json`, `fold_<k>/{results.csv, results.png, args.yaml}` |
+| `baseline/<scale>/` | Baseline configuration and default training (IV-A) | `results.csv`, `results.png` (training and validation curves), `args.yaml` |
+| `hpo/<scale>/` | Domain-specific hyperparameter optimization (IV-B) | `best_hyperparameters.yaml`, `tune_results.csv`, `tune_fitness.png` |
+| `optimized/<scale>/` | Optimized fine-tuning protocol (IV-C) | `results.csv`, `results.png`, `args.yaml` |
+| `cv/<scale>/` | 5-fold cross-validation (IV-D) | `metrics_per_fold.csv`, `metrics_summary.json`, `fold_<k>/{results.csv, results.png, args.yaml}` |
 | `pixelwise/` | Pixel-wise JSI and DSC (Table I) | `pixelwise_metrics.json`, `per_image/<split>__<scale>[__fold_<k>].csv` |
 | `summary/` | Summary tables | see below |
 | `scripts/` | Evaluation and aggregation code | see below |
