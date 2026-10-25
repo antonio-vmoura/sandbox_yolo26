@@ -27,11 +27,10 @@ Five YOLO26-seg scales (`nano`, `small`, `medium`, `large`, `xlarge`) on the off
 | `pixelwise_main_table.csv` | Table I: JSI / DSC per scale (baseline, optimized, 5-fold CV, test set), parameters and GFLOPs |
 | `test_paired_comparisons.csv` | Paired test-set comparisons between scales (bootstrap 95 % CI, Wilcoxon signed-rank) |
 | `model_complexity.csv` | Parameters and GFLOPs per scale |
-| `phase1_baseline.csv` | Baseline: best epoch, instance metrics, training configuration |
+| `phase1_baseline.csv` | Baseline: best epoch (`best.pt`), its fitness mAP50-95(B) + mAP50-95(M), instance metrics, training configuration |
 | `phase2_hpo_best_params.csv` | Selected hyperparameters and HPO cost per scale |
-| `phase3_finetune.csv` | Optimized fine-tuning: best epoch, instance metrics, training configuration |
-| `phase4_cv_ultralytics_metrics.csv` | Cross-validation instance metrics per fold, mean and SD |
-| `cv_consolidated.*`, `optimized_metrics.*` | Pipeline-generated summaries of the CV and optimized runs |
+| `phase3_finetune.csv` | Optimized fine-tuning: best epoch (`best.pt`), its fitness, instance metrics, training configuration |
+| `phase4_cv_ultralytics_metrics.csv` | Cross-validation instance metrics per fold (epoch of highest mask mAP50-95), mean and SD; the pixel-wise CV uses each fold's `best.pt` |
 | `dataset_and_cv_splits.csv` | `image_id`, `partition` (train / val / test) and `cv_fold` of every image |
 
 **`scripts/`**

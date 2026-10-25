@@ -1,2 +1,0 @@
-model,results_csv,best_epoch,f1_b,f1_m,map5095_b,map5095_m,map50_b,map50_m,precision_b,precision_m,recall_b,recall_m
-xlarge,/workspace/logs/pipeline_e2e_v3/yolo26_xlarge_ft_isic_2018_v11/results.csv,11.0,0.9613536414201799,0.9477093950414268,0.70577,0.71568,0.98319,0.97241,0.9837,0.97869,0.94,0.91863

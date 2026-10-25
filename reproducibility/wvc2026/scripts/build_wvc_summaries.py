@@ -30,9 +30,8 @@ MODELS = ["nano", "small", "medium", "large", "xlarge"]
 
 
 def fitness(df):
-    """Ultralytics segment fitness used for best.pt: 0.1*mAP50 + 0.9*mAP50-95 for box plus mask."""
-    return (0.1 * df["metrics/mAP50(B)"] + 0.9 * df["metrics/mAP50-95(B)"]
-            + 0.1 * df["metrics/mAP50(M)"] + 0.9 * df["metrics/mAP50-95(M)"])
+    """Ultralytics 8.4.21 segment fitness used for best.pt: mAP50-95(B) + mAP50-95(M)."""
+    return df["metrics/mAP50-95(B)"] + df["metrics/mAP50-95(M)"]
 
 
 def read_results(p):
@@ -44,8 +43,7 @@ def read_results(p):
 def run_row(results_csv, args_yaml):
     df = read_results(results_csv)
     df["fitness"] = fitness(df)
-    i = int(df["fitness"].values.argmax())            # first max, like Ultralytics (>=) keeps the last; see note below
-    # Ultralytics keeps the LAST epoch among ties; ties are measure-zero with 5-decimal metrics, but be exact:
+    # Ultralytics keeps the LAST epoch among ties
     best = df["fitness"].max()
     i = int(np.flatnonzero(np.isclose(df["fitness"].values, best))[-1])
     r = df.iloc[i]
@@ -149,7 +147,7 @@ for m in MODELS:
         test_lowconf_lt_0p25=int((tst["top_conf"] < 0.25).sum()),
         test_fail_and_lowconf=int(((tst["dsc"] < 0.5) & (tst["top_conf"] < 0.25)).sum()),
     ))
-pxt = pd.DataFrame(tab).round(4)
+pxt = pd.DataFrame(tab).round(6)   # 6 decimals so that 2-decimal rounding downstream is exact
 cx = pd.read_csv(OUT / "model_complexity.csv")
 cx["model"] = ["nano", "small", "medium", "large", "xlarge"]
 pxt = pxt.merge(cx[["model", "params_unfused", "gflops_unfused", "params_fused", "gflops_fused"]], on="model")
