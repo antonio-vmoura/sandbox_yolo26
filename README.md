@@ -9,6 +9,17 @@ https://www.ultralytics.com/blog/how-to-custom-train-ultralytics-yolo26-for-inst
 
 ---
 
+## Reproducibility & published results
+
+Training/validation curves, tuned hyperparameters, cross-validation results and summary tables of each paper live
+under [`reproducibility/`](reproducibility/). Each paper's training code is frozen as a git tag.
+
+| Publication | Artifacts | Code | Dataset |
+|---|---|---|---|
+| *YOLO26-seg for Skin Lesion Segmentation: Resolving the Precision-Efficiency Trade-off* — WVC 2026 | [`reproducibility/wvc2026/`](reproducibility/wvc2026/) | tag [`wvc2026`](https://github.com/antonio-vmoura/sandbox_yolo26/tree/wvc2026) | Official ISIC 2018 Task 1 benchmark |
+
+---
+
 ## The 5-phase protocol
 
 | Phase | What | Data | Script(s) |
@@ -124,6 +135,8 @@ sandbox_yolo26/
 │   └── legacy/                # earlier analysis notebooks (kept as a backup)
 ├── utils/legacy/              # earlier helper scripts and examples (kept as a backup)
 ├── figures/legacy/            # earlier qualitative figures
+├── reproducibility/           # published-paper artifacts (curves, HPO, CV, summary tables, scripts)
+│   └── wvc2026/               # WVC 2026 paper (code tag `wvc2026`)
 ├── datasets/  logs/  cache/   # data, outputs, weights (not versioned)
 ```
 

@@ -1,0 +1,20 @@
+# 30/30 iterations complete ✅ (42334.89s)
+# Results saved to /workspace/logs/pipeline_e2e_v3/hpo/hpo_v3/tune_isic_2018_task_1_small
+# Best fitness=1.47303 observed at iteration 26
+# Best fitness metrics are {'metrics/precision(B)': 0.96227, 'metrics/recall(B)': 0.97, 'metrics/mAP50(B)': 0.98229, 'metrics/mAP50-95(B)': 0.739, 'metrics/precision(M)': 0.96227, 'metrics/recall(M)': 0.97, 'metrics/mAP50(M)': 0.98314, 'metrics/mAP50-95(M)': 0.73403, 'val/box_loss': 1.07674, 'val/seg_loss': 1.44962, 'val/cls_loss': 0.49671, 'val/dfl_loss': 0.02499, 'val/sem_loss': 0.0, 'fitness': 1.47303}
+# Best fitness model is /workspace/logs/pipeline_e2e_v3/hpo/hpo_v3/train10
+lr0: 0.00379
+lrf: 0.01204
+momentum: 0.85
+weight_decay: 0.0
+warmup_epochs: 3.81213
+cls: 0.70571
+dfl: 1.27961
+hsv_h: 0.00978
+hsv_s: 0.6669
+hsv_v: 0.26923
+translate: 0.06938
+flipud: 0.00588
+mosaic: 0.87976
+mixup: 0.01085
+copy_paste: 0.00636

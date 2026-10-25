@@ -1,0 +1,6 @@
+model,params_unfused,gflops_unfused,params_fused,gflops_fused,source
+n,3053055,10.2,2689079,9.0,Ultralytics model summary line in training logs
+s,11434463,37.1,10365727,34.1,Ultralytics model summary line in training logs
+m,26969951,131.9,23508239,121.2,Ultralytics model summary line in training logs
+l,31373407,150.3,27904527,139.4,Ultralytics model summary line in training logs
+x,70480895,336.6,62727887,313.0,Ultralytics model summary line in training logs

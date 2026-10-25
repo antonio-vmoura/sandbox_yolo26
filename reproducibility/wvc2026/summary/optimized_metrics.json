@@ -1,0 +1,21 @@
+{
+  "missing": [],
+  "models": [
+    {
+      "best_epoch": 11.0,
+      "f1_b": 0.9613536414201799,
+      "f1_m": 0.9477093950414268,
+      "map5095_b": 0.70577,
+      "map5095_m": 0.71568,
+      "map50_b": 0.98319,
+      "map50_m": 0.97241,
+      "model": "xlarge",
+      "precision_b": 0.9837,
+      "precision_m": 0.97869,
+      "recall_b": 0.94,
+      "recall_m": 0.91863,
+      "results_csv": "/workspace/logs/pipeline_e2e_v3/yolo26_xlarge_ft_isic_2018_v11/results.csv"
+    }
+  ],
+  "phase": "optimized"
+}
