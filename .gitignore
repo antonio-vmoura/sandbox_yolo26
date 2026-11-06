@@ -225,3 +225,6 @@ METHODOLOGY_NOTES_FOR_*.md
 # Phase 0 output (built from the raw official ISIC 2018 Task 1 release) and its backups
 datasets/isic2018_task1_official*/
 datasets/isic2018_task2_official*/
+
+# Datasets are built by Phase 0 or downloaded, never versioned
+datasets/*
