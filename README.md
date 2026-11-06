@@ -124,7 +124,8 @@ sandbox_yolo26/
 │   ├── collect_phase_metrics.py        # Phase 1/4 summaries
 │   ├── evaluate_test_set.py            # Phase 5a
 │   ├── benchmark_efficiency.py         # Phase 5b
-│   └── build_final_report.py           # Phase 5c
+│   ├── build_final_report.py           # Phase 5c
+│   └── export_phase1_val_masks.py      # Phase 1 validation masks for the side-by-side figure of notebook 04
 ├── analysis/                  # every Jupyter notebook + the cross-architecture tooling
 │   ├── 01_internal_analysis.ipynb          # run first: every phase, from the first epoch of Phase 1
 │   ├── 02_segmentation_visualizer.ipynb    # Phase 5
@@ -353,9 +354,9 @@ GPU_DEVICE=0 ./wait_gpu.sh --phases "1 2 3 4 5" --force # start Phases 1-5 over 
 Copy the results to your machine:
 
 ```bash
-rsync -avz --progress -e "ssh -p 13508" \
-    antoniovinicius@164.41.75.221:/home/antoniovinicius/projects/sandbox_yolo26/logs/pipeline_final_v1 \
-    /home/avmoura_linux/Documents/unb/SANDBOX_YOLO26/logs/
+rsync -avz --progress \
+    <user>@<server>:<path-to>/sandbox_yolo26/logs/pipeline_final_v1 \
+    ./logs/
 ```
 
 Hardware monitoring: `nvidia-smi`, `nvtop`.
