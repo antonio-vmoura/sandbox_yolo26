@@ -66,7 +66,7 @@ exact checkpoint that is evaluated in Phase 5.
   `KFold(shuffle=True, random_state=0)`). `splits_manifest.json` fingerprints the folds; a re-run with different splits is refused.
 * **HPO:** the upstream Tuner re-seeds its mutations from the clock. `SeededTuner` uses
   `np.random.default_rng([seed, trial])`, so the hyperparameters of trial *i* depend only on the seed, *i* and the
-  fitness history. Caveat for the thesis: proposals are bit-reproducible given identical fitness values; fitness comes
+  fitness history. Caveat: proposals are bit-reproducible given identical fitness values; fitness comes
   from GPU training, which is deterministic only up to `deterministic=True` (`warn_only`) and DDP reduction order.
 * **Pinned environment** (`Dockerfile`): `torch==2.5.1`, `torchvision==0.20.1`, `torchaudio==2.5.1` (`+cu121`),
   `ultralytics==8.4.21`, `pandas==3.0.1`. The HPO checkpoint refuses to resume under another Ultralytics version.
@@ -131,7 +131,7 @@ sandbox_yolo26/
 │   ├── 02_segmentation_visualizer.ipynb    # Phase 5
 │   ├── 03_metrics_and_efficiency.ipynb     # Phase 5
 │   ├── 04_cross_architecture_results.ipynb # Phase 5, all three architectures
-│   ├── results_aggregator.py  methodology_notes.md
+│   ├── results_aggregator.py
 │   └── legacy/                # earlier analysis notebooks (kept as a backup)
 ├── utils/legacy/              # earlier helper scripts and examples (kept as a backup)
 ├── figures/legacy/            # earlier qualitative figures
@@ -295,10 +295,6 @@ re-run to resume) · any other value is the exit code of the failing step (its l
   would silently be halved. With `nbs=64` held constant, Ultralytics accumulates gradients
   (`accumulate = round(nbs / batch)`), so the **effective optimisation batch is 64 in every phase and for every
   size**; only the BatchNorm batch statistics differ for xlarge.
-
-  Suggested wording: *"The nominal batch size (nbs = 64) is held constant across all phases and model sizes, so the
-  effective optimisation batch size is identical (64) throughout the study; the micro-batch is 16, except for the
-  largest variant (8), which does not fit at 16 in FP32 on a 32 GB GPU."*
 
 ---
 
