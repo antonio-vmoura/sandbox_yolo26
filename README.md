@@ -66,7 +66,7 @@ exact checkpoint that is evaluated in Phase 5.
   `KFold(shuffle=True, random_state=0)`). `splits_manifest.json` fingerprints the folds; a re-run with different splits is refused.
 * **HPO:** the upstream Tuner re-seeds its mutations from the clock. `SeededTuner` uses
   `np.random.default_rng([seed, trial])`, so the hyperparameters of trial *i* depend only on the seed, *i* and the
-  fitness history. Caveat for the thesis: proposals are bit-reproducible given identical fitness values; fitness comes
+  fitness history. Caveat: proposals are bit-reproducible given identical fitness values; fitness comes
   from GPU training, which is deterministic only up to `deterministic=True` (`warn_only`) and DDP reduction order.
 * **Pinned environment** (`Dockerfile`): `torch==2.5.1`, `torchvision==0.20.1`, `torchaudio==2.5.1` (`+cu121`),
   `ultralytics==8.4.21`, `pandas==3.0.1`. The HPO checkpoint refuses to resume under another Ultralytics version.
@@ -125,16 +125,13 @@ sandbox_yolo26/
 │   ├── evaluate_test_set.py            # Phase 5a
 │   ├── benchmark_efficiency.py         # Phase 5b
 │   ├── build_final_report.py           # Phase 5c
-│   └── legacy/                         # superseded scripts (kept for old notebooks)
+│   └── export_phase1_val_masks.py      # Phase 1 validation masks for the side-by-side figure of notebook 04
 ├── analysis/                  # every Jupyter notebook + the cross-architecture tooling
 │   ├── 01_internal_analysis.ipynb          # run first: every phase, from the first epoch of Phase 1
 │   ├── 02_segmentation_visualizer.ipynb    # Phase 5
 │   ├── 03_metrics_and_efficiency.ipynb     # Phase 5
 │   ├── 04_cross_architecture_results.ipynb # Phase 5, all three architectures
-│   ├── results_aggregator.py  methodology_notes.md
-│   └── legacy/                # earlier analysis notebooks (kept as a backup)
-├── utils/legacy/              # earlier helper scripts and examples (kept as a backup)
-├── figures/legacy/            # earlier qualitative figures
+│   └── results_aggregator.py
 ├── reproducibility/           # published-paper artifacts (curves, HPO, CV, summary tables, scripts)
 │   └── wvc2026/               # WVC 2026 paper (code tag `wvc2026`)
 ├── datasets/  logs/  cache/   # data, outputs, weights (not versioned)
@@ -212,7 +209,6 @@ docker run --gpus all -it --rm \
     -v "$(pwd)/../datasets/ISIC2018_Raw:/workspace/raw:ro" \
     -v "$(pwd)/logs:/workspace/logs" \
     -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
-    -v "$(pwd)/utils:/workspace/utils" \
     -v "$(pwd)/cache:/workspace/cache" \
     -v "$(pwd)/run_pipeline.sh:/workspace/run_pipeline.sh:ro" \
     -v /etc/passwd:/etc/passwd:ro \
@@ -296,10 +292,6 @@ re-run to resume) · any other value is the exit code of the failing step (its l
   (`accumulate = round(nbs / batch)`), so the **effective optimisation batch is 64 in every phase and for every
   size**; only the BatchNorm batch statistics differ for xlarge.
 
-  Suggested wording: *"The nominal batch size (nbs = 64) is held constant across all phases and model sizes, so the
-  effective optimisation batch size is identical (64) throughout the study; the micro-batch is 16, except for the
-  largest variant (8), which does not fit at 16 in FP32 on a 32 GB GPU."*
-
 ---
 
 ## Analysis notebooks
@@ -362,9 +354,9 @@ GPU_DEVICE=0 ./wait_gpu.sh --phases "1 2 3 4 5" --force # start Phases 1-5 over 
 Copy the results to your machine:
 
 ```bash
-rsync -avz --progress -e "ssh -p 13508" \
-    antoniovinicius@164.41.75.221:/home/antoniovinicius/projects/sandbox_yolo26/logs/pipeline_final_v1 \
-    /home/avmoura_linux/Documents/unb/SANDBOX_YOLO26/logs/
+rsync -avz --progress \
+    <user>@<server>:<path-to>/sandbox_yolo26/logs/pipeline_final_v1 \
+    ./logs/
 ```
 
 Hardware monitoring: `nvidia-smi`, `nvtop`.
