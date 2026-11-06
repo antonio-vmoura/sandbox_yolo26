@@ -124,17 +124,13 @@ sandbox_yolo26/
 │   ├── collect_phase_metrics.py        # Phase 1/4 summaries
 │   ├── evaluate_test_set.py            # Phase 5a
 │   ├── benchmark_efficiency.py         # Phase 5b
-│   ├── build_final_report.py           # Phase 5c
-│   └── legacy/                         # superseded scripts (kept for old notebooks)
+│   └── build_final_report.py           # Phase 5c
 ├── analysis/                  # every Jupyter notebook + the cross-architecture tooling
 │   ├── 01_internal_analysis.ipynb          # run first: every phase, from the first epoch of Phase 1
 │   ├── 02_segmentation_visualizer.ipynb    # Phase 5
 │   ├── 03_metrics_and_efficiency.ipynb     # Phase 5
 │   ├── 04_cross_architecture_results.ipynb # Phase 5, all three architectures
-│   ├── results_aggregator.py
-│   └── legacy/                # earlier analysis notebooks (kept as a backup)
-├── utils/legacy/              # earlier helper scripts and examples (kept as a backup)
-├── figures/legacy/            # earlier qualitative figures
+│   └── results_aggregator.py
 ├── reproducibility/           # published-paper artifacts (curves, HPO, CV, summary tables, scripts)
 │   └── wvc2026/               # WVC 2026 paper (code tag `wvc2026`)
 ├── datasets/  logs/  cache/   # data, outputs, weights (not versioned)
@@ -212,7 +208,6 @@ docker run --gpus all -it --rm \
     -v "$(pwd)/../datasets/ISIC2018_Raw:/workspace/raw:ro" \
     -v "$(pwd)/logs:/workspace/logs" \
     -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
-    -v "$(pwd)/utils:/workspace/utils" \
     -v "$(pwd)/cache:/workspace/cache" \
     -v "$(pwd)/run_pipeline.sh:/workspace/run_pipeline.sh:ro" \
     -v /etc/passwd:/etc/passwd:ro \

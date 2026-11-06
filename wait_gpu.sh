@@ -100,7 +100,6 @@ docker run "${GPU_ARGS[@]}" --rm --ipc=host \
   -v "${RAW_DATASET}:/workspace/raw:ro" \
   -v "$(pwd)/logs:/workspace/logs" \
   -v "$(pwd)/yolo26_seg:/workspace/yolo26_seg" \
-  -v "$(pwd)/utils:/workspace/utils" \
   -v "$(pwd)/cache:/workspace/cache" \
   -v "$(pwd)/run_pipeline.sh:/workspace/run_pipeline.sh:ro" \
   -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \

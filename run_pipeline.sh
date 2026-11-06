@@ -31,7 +31,7 @@
 #
 # All commands assume the script runs *inside* the ``yolo26_ft`` Docker
 # container with the standard volume mounts (datasets, logs, yolo26_seg,
-# utils, cache). See README.md for the full ``docker run`` invocation.
+# cache). See README.md for the full ``docker run`` invocation.
 # =============================================================================
 set -euo pipefail
 
