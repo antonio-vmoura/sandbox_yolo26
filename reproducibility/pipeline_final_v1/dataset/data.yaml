@@ -1,0 +1,7 @@
+path: datasets/isic2018_task1_official
+train: train/images
+val: valid/images
+test: test/images
+nc: 1
+names:
+- lesion

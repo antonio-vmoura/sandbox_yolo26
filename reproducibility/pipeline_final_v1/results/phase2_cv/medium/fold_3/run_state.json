@@ -1,0 +1,60 @@
+{
+  "batch_effective": 16,
+  "best_pt": "logs/pipeline_final_v1/phase2_cv_baseline/yolo26_medium/runs/fold_3/weights/best.pt",
+  "epochs_trained": 120,
+  "events": [
+    {
+      "at": "2026-10-04T11:06:52+00:00",
+      "event": "start"
+    },
+    {
+      "at": "2026-10-04T15:06:56+00:00",
+      "elapsed_min": 240.06,
+      "event": "complete"
+    }
+  ],
+  "metrics": {
+    "best_epoch": 120.0,
+    "best_epoch_source": "best.pt",
+    "epochs_trained": 120.0,
+    "f1_b": 0.9447248788978594,
+    "f1_m": 0.9398839096560783,
+    "fitness": 1.48038,
+    "map5095_b": 0.75303,
+    "map5095_m": 0.72735,
+    "map50_b": 0.95898,
+    "map50_m": 0.95481,
+    "precision_b": 0.96313,
+    "precision_m": 0.95701,
+    "recall_b": 0.92701,
+    "recall_m": 0.92336
+  },
+  "model": "medium",
+  "phase": "phase2_cv_baseline",
+  "protocol": {
+    "amp": false,
+    "batch": 16,
+    "cache": false,
+    "close_mosaic": 10,
+    "cos_lr": true,
+    "data": "logs/pipeline_final_v1/phase2_cv_baseline/yolo26_medium/splits/fold_3/data.yaml",
+    "deterministic": true,
+    "epochs": 120,
+    "imgsz": 640,
+    "nbs": 64,
+    "optimizer": "MuSGD",
+    "patience": 120,
+    "pretrained": true,
+    "save": true,
+    "seed": 0,
+    "task": "segment",
+    "val": true,
+    "workers": 8
+  },
+  "protocol_hash": "cdb5d49e434b4e6a",
+  "run_dir": "logs/pipeline_final_v1/phase2_cv_baseline/yolo26_medium/runs/fold_3",
+  "status": "complete",
+  "torch_version": "2.5.1+cu121",
+  "ultralytics_version": "8.4.21",
+  "weights": "cache/yolo26m-seg.pt"
+}

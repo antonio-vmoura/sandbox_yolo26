@@ -1,0 +1,13 @@
+{
+  "arch": "yolo26",
+  "model": "nano",
+  "label": "YOLO26-nano",
+  "split": "val (official, n=100)",
+  "source": "Phase 1 best.pt",
+  "weights": "logs/pipeline_final_v1/phase1_baseline/yolo26_nano_baseline/weights/best.pt",
+  "weights_sha256": "830c81e68eb171b80f3d7bc3f5bfeb368f874d4bb4a31ef822ecb5f32d7050f2",
+  "rule": "top-1 instance, conf >= 0.001",
+  "device": "cpu",
+  "jsi_mean": 0.8169812167345427,
+  "dsc_mean": 0.8905447217727744
+}

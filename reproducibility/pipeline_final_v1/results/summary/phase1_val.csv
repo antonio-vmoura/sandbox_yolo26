@@ -1,0 +1,6 @@
+model,split,resumed,run_dir,batch_requested,batch_effective,precision_b,recall_b,map50_b,map5095_b,precision_m,recall_m,map50_m,map5095_m,f1_b,f1_m,fitness,best_epoch,epochs_trained,best_epoch_source
+nano,val,False,logs/pipeline_final_v1/phase1_baseline/yolo26_nano_baseline,16,16,0.94861,0.95,0.96466,0.67463,0.94861,0.95,0.96466,0.7158,0.9493044911803898,0.9493044911803898,1.3904299999999998,69.0,120.0,best.pt
+small,val,False,logs/pipeline_final_v1/phase1_baseline/yolo26_small_baseline,16,16,0.91658,0.96,0.97245,0.6738,0.89748,0.94,0.96982,0.70395,0.9377876775836894,0.9182480353527658,1.3777499999999998,37.0,120.0,best.pt
+medium,val,False,logs/pipeline_final_v1/phase1_baseline/yolo26_medium_baseline,16,16,0.98843,0.96,0.97949,0.69533,0.95677,0.93,0.9535,0.70179,0.9740075855945556,0.9431950900215713,1.3971200000000001,57.0,120.0,best.pt
+large,val,False,logs/pipeline_final_v1/phase1_baseline/yolo26_large_baseline,16,16,0.95757,0.95,0.97488,0.70598,0.9677,0.96,0.98557,0.7121,0.9537699796075635,0.9638346215697463,1.41808,57.0,120.0,best.pt
+xlarge,val,False,logs/pipeline_final_v1/phase1_baseline/yolo26_xlarge_baseline,16,8,0.95044,0.95895,0.97091,0.67957,0.92883,0.93,0.94884,0.69669,0.9546760358020101,0.9294146317845096,1.37626,91.0,120.0,best.pt

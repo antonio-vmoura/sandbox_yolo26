@@ -1,0 +1,20 @@
+# 30/30 iterations complete ✅ (122759.43s)
+# Results saved to logs/pipeline_final_v1/phase3_hpo/tune_medium
+# Best fitness=1.42893 observed at iteration 26
+# Best fitness metrics are {'metrics/precision(B)': 0.95939, 'metrics/recall(B)': 0.94496, 'metrics/mAP50(B)': 0.97448, 'metrics/mAP50-95(B)': 0.71603, 'metrics/precision(M)': 0.94924, 'metrics/recall(M)': 0.93496, 'metrics/mAP50(M)': 0.96766, 'metrics/mAP50-95(M)': 0.7129, 'val/box_loss': 1.12043, 'val/seg_loss': 1.51094, 'val/cls_loss': 0.53421, 'val/dfl_loss': 0.02982, 'val/sem_loss': 0.0, 'fitness': 1.42893}
+# Best fitness model is logs/pipeline_final_v1/phase3_hpo/tune_medium/trials/train
+lr0: 0.00194
+lrf: 0.00596
+momentum: 0.94917
+weight_decay: 0.0
+warmup_epochs: 2.2273
+cls: 0.63621
+dfl: 1.5
+hsv_h: 0.005
+hsv_s: 0.68814
+hsv_v: 0.66783
+translate: 0.06041
+flipud: 0.00452
+mosaic: 0.89571
+mixup: 0.00586
+copy_paste: 0.00722

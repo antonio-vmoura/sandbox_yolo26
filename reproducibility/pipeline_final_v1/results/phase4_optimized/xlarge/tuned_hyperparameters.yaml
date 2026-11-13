@@ -1,0 +1,20 @@
+# 30/30 iterations complete ✅ (56855.70s)
+# Results saved to logs/pipeline_final_v1/phase3_hpo/tune_xlarge
+# Best fitness=1.44977 observed at iteration 9
+# Best fitness metrics are None
+# Best fitness model is None
+lr0: 0.0034
+lrf: 0.00758
+momentum: 0.93791
+weight_decay: 3.0e-05
+warmup_epochs: 3.48187
+cls: 0.6793
+dfl: 1.48971
+hsv_h: 0.00618
+hsv_s: 0.53013
+hsv_v: 0.2564
+translate: 0.1446
+flipud: 9.0e-05
+mosaic: 0.85914
+mixup: 0.00403
+copy_paste: 0.0011
