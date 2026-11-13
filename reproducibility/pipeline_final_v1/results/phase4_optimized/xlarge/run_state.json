@@ -1,0 +1,81 @@
+{
+  "batch_effective": 8,
+  "best_pt": "logs/pipeline_final_v1/phase4_optimized/yolo26_xlarge_optimized/weights/best.pt",
+  "epochs_trained": 120,
+  "events": [
+    {
+      "at": "2026-10-16T21:34:42+00:00",
+      "event": "start"
+    },
+    {
+      "at": "2026-10-17T08:03:21+00:00",
+      "event": "batch_reduced",
+      "requested": 16,
+      "used": 8
+    },
+    {
+      "at": "2026-10-17T08:03:21+00:00",
+      "elapsed_min": 628.67,
+      "event": "complete"
+    }
+  ],
+  "metrics": {
+    "best_epoch": 12.0,
+    "best_epoch_source": "best.pt",
+    "epochs_trained": 120.0,
+    "f1_b": 0.8844154043037789,
+    "f1_m": 0.8950398859129195,
+    "fitness": 1.40985,
+    "map5095_b": 0.69792,
+    "map5095_m": 0.71193,
+    "map50_b": 0.9433,
+    "map50_m": 0.94734,
+    "precision_b": 0.93379,
+    "precision_m": 0.94512,
+    "recall_b": 0.84,
+    "recall_m": 0.85
+  },
+  "model": "xlarge",
+  "phase": "phase4_optimized",
+  "protocol": {
+    "amp": false,
+    "batch": 16,
+    "cache": false,
+    "close_mosaic": 10,
+    "cls": 0.6793,
+    "copy_paste": 0.0011,
+    "cos_lr": true,
+    "data": "datasets/isic2018_task1_official/data.yaml",
+    "deterministic": true,
+    "dfl": 1.48971,
+    "epochs": 120,
+    "flipud": 9e-05,
+    "hsv_h": 0.00618,
+    "hsv_s": 0.53013,
+    "hsv_v": 0.2564,
+    "imgsz": 640,
+    "lr0": 0.0034,
+    "lrf": 0.00758,
+    "mixup": 0.00403,
+    "momentum": 0.93791,
+    "mosaic": 0.85914,
+    "nbs": 64,
+    "optimizer": "MuSGD",
+    "patience": 120,
+    "pretrained": true,
+    "save": true,
+    "seed": 0,
+    "task": "segment",
+    "translate": 0.1446,
+    "val": true,
+    "warmup_epochs": 3.48187,
+    "weight_decay": 3e-05,
+    "workers": 8
+  },
+  "protocol_hash": "e9d9dd5d34afbe42",
+  "run_dir": "logs/pipeline_final_v1/phase4_optimized/yolo26_xlarge_optimized",
+  "status": "complete",
+  "torch_version": "2.5.1+cu121",
+  "ultralytics_version": "8.4.21",
+  "weights": "cache/yolo26x-seg.pt"
+}

@@ -1,0 +1,39 @@
+{
+  "folds": [
+    {
+      "fold": 0,
+      "n_train": 2155,
+      "n_val": 539,
+      "val_sha256": "89540d8823c2a25e05c3b76f4ae5196cb31b7113f3eb0a8cff2f3e60ddcb1f32"
+    },
+    {
+      "fold": 1,
+      "n_train": 2155,
+      "n_val": 539,
+      "val_sha256": "cbf3909e6a94a1fcc7dab66bf8dd9a0018d7d52801f02d6c8afecfa59a910386"
+    },
+    {
+      "fold": 2,
+      "n_train": 2155,
+      "n_val": 539,
+      "val_sha256": "d12b92769df935a00b09a555f21765ef5231ce8cd046d45cefa124dde5a8f7db"
+    },
+    {
+      "fold": 3,
+      "n_train": 2155,
+      "n_val": 539,
+      "val_sha256": "0c4edd094a5b830c04f6ee5db146983e9fb981d66e32033b0632b06c96861cd8"
+    },
+    {
+      "fold": 4,
+      "n_train": 2156,
+      "n_val": 538,
+      "val_sha256": "4229b9ed8c05a30f804574046eb215c8f59e3e6ec3be7e19d5ce8f42d2ffea96"
+    }
+  ],
+  "k": 5,
+  "pool_sha256": "a0d5200f06d000bb8ab26d3aebf769dc64e6bf2cd767373ace7ebde33d449af5",
+  "pool_size": 2694,
+  "seed": 0,
+  "test_size_excluded": 1000
+}

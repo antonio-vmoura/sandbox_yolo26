@@ -1,0 +1,66 @@
+{
+  "batch_effective": 8,
+  "best_pt": "logs/pipeline_final_v1/phase1_baseline/yolo26_xlarge_baseline/weights/best.pt",
+  "epochs_trained": 120,
+  "events": [
+    {
+      "at": "2026-10-02T15:51:58+00:00",
+      "event": "start"
+    },
+    {
+      "at": "2026-10-03T02:22:36+00:00",
+      "event": "batch_reduced",
+      "requested": 16,
+      "used": 8
+    },
+    {
+      "at": "2026-10-03T02:22:36+00:00",
+      "elapsed_min": 630.63,
+      "event": "complete"
+    }
+  ],
+  "metrics": {
+    "best_epoch": 91.0,
+    "best_epoch_source": "best.pt",
+    "epochs_trained": 120.0,
+    "f1_b": 0.9546760358020101,
+    "f1_m": 0.9294146317845096,
+    "fitness": 1.37626,
+    "map5095_b": 0.67957,
+    "map5095_m": 0.69669,
+    "map50_b": 0.97091,
+    "map50_m": 0.94884,
+    "precision_b": 0.95044,
+    "precision_m": 0.92883,
+    "recall_b": 0.95895,
+    "recall_m": 0.93
+  },
+  "model": "xlarge",
+  "phase": "phase1_baseline",
+  "protocol": {
+    "amp": false,
+    "batch": 16,
+    "cache": false,
+    "close_mosaic": 10,
+    "cos_lr": true,
+    "data": "datasets/isic2018_task1_official/data.yaml",
+    "deterministic": true,
+    "epochs": 120,
+    "imgsz": 640,
+    "nbs": 64,
+    "optimizer": "MuSGD",
+    "patience": 120,
+    "pretrained": true,
+    "save": true,
+    "seed": 0,
+    "task": "segment",
+    "val": true,
+    "workers": 8
+  },
+  "protocol_hash": "a18fbf88246ab090",
+  "run_dir": "logs/pipeline_final_v1/phase1_baseline/yolo26_xlarge_baseline",
+  "status": "complete",
+  "torch_version": "2.5.1+cu121",
+  "ultralytics_version": "8.4.21",
+  "weights": "cache/yolo26x-seg.pt"
+}

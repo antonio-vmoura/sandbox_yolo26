@@ -1,0 +1,129 @@
+{
+  "accepted_failures": [],
+  "best_fitness": 1.44981,
+  "best_trial": 25,
+  "completed_trials": 30,
+  "config": {
+    "fixed": {
+      "amp": false,
+      "batch": 16,
+      "cache": false,
+      "close_mosaic": 10,
+      "cos_lr": true,
+      "data": "datasets/isic2018_task1_official/data.yaml",
+      "deterministic": true,
+      "epochs": 30,
+      "imgsz": 640,
+      "nbs": 64,
+      "optimizer": "MuSGD",
+      "patience": 30,
+      "pretrained": true,
+      "save": true,
+      "seed": 0,
+      "task": "segment",
+      "val": true,
+      "workers": 8
+    },
+    "ga": {
+      "alpha": 0.2,
+      "mutation": 0.5,
+      "top_n": 9
+    },
+    "model": "small",
+    "seed": 0,
+    "space": {
+      "cls": [
+        0.2,
+        1.5
+      ],
+      "copy_paste": [
+        0.0,
+        0.05
+      ],
+      "dfl": [
+        0.8,
+        1.5
+      ],
+      "flipud": [
+        0.0,
+        0.1
+      ],
+      "hsv_h": [
+        0.005,
+        0.025
+      ],
+      "hsv_s": [
+        0.3,
+        0.9
+      ],
+      "hsv_v": [
+        0.2,
+        0.7
+      ],
+      "lr0": [
+        0.001,
+        0.004
+      ],
+      "lrf": [
+        0.005,
+        0.05
+      ],
+      "mixup": [
+        0.0,
+        0.05
+      ],
+      "momentum": [
+        0.85,
+        0.95,
+        0.3
+      ],
+      "mosaic": [
+        0.7,
+        1.0
+      ],
+      "translate": [
+        0.05,
+        0.2
+      ],
+      "warmup_epochs": [
+        1.0,
+        5.0
+      ],
+      "weight_decay": [
+        1e-06,
+        0.0001
+      ]
+    },
+    "weights": "yolo26s-seg.pt"
+  },
+  "config_hash": "8659338c4532d88e",
+  "created_at": "2026-10-08T20:50:13+00:00",
+  "failed_attempts": {},
+  "history": [
+    {
+      "at": "2026-10-08T20:50:13+00:00",
+      "completed_trials": 0,
+      "event": "start"
+    },
+    {
+      "at": "2026-10-09T15:46:20+00:00",
+      "best_fitness": 1.44981,
+      "completed_trials": 30,
+      "event": "complete"
+    }
+  ],
+  "in_flight_trial": null,
+  "known_trial_dirs": [
+    "train",
+    "train2",
+    "train4",
+    "train5"
+  ],
+  "last_update": "2026-10-09T15:46:20+00:00",
+  "model": "small",
+  "schema": 1,
+  "status": "complete",
+  "target_trials": 30,
+  "ultralytics_version": "8.4.21",
+  "valid_trials": 30
+}

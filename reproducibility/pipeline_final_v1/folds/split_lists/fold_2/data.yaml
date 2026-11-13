@@ -1,0 +1,6 @@
+path: logs/pipeline_final_v1/phase2_cv_baseline/yolo26_nano/splits/fold_2
+train: logs/pipeline_final_v1/phase2_cv_baseline/yolo26_nano/splits/fold_2/train.txt
+val: logs/pipeline_final_v1/phase2_cv_baseline/yolo26_nano/splits/fold_2/val.txt
+nc: 1
+names:
+- lesion
